@@ -1,0 +1,18 @@
+{
+  "name": "Ollama API",
+  "description": "Configuration for testing Ollama model APIs",
+  "endpoint": "https://8f36-34-124-197-24.ngrok-free.app/api/generate",
+  "method": "POST",
+  "headers": {
+  },
+  "params": {},
+  "payload_template": {
+    "model": "llama3.2",
+    "prompt": "",
+    "stream": false
+  },
+  "supports_temperature": true,
+  "temperature_key": "temperature",
+  "supports_system_prompt": false,
+  "response_path": "response"
+} 

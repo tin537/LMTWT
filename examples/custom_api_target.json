@@ -1,0 +1,25 @@
+{
+  "name": "Custom API",
+  "description": "Generic template for custom API endpoints",
+  "endpoint": "https://your-api-endpoint.com/v1/chat",
+  "method": "POST",
+  "headers": {
+    "Authorization": "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json"
+  },
+  "params": {
+    "version": "1.0"
+  },
+  "payload_template": {
+    "model": "model-name",
+    "prompt": "",
+    "max_tokens": 1024,
+    "stream": false
+  },
+  "model_key": "model",
+  "supports_temperature": true,
+  "temperature_key": "temperature",
+  "supports_system_prompt": true,
+  "system_key": "system",
+  "response_path": "choices.0.text"
+} 
