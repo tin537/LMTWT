@@ -2,29 +2,42 @@ import os
 import json
 import requests
 from typing import Dict, Optional, Any, List
-from .base import AIModel
+from .base import AIModel, CircuitBreakerError
 
 
 class ExternalAPIModel(AIModel):
     """External API model implementation for interacting with custom API endpoints."""
     
-    def __init__(self, api_config: Dict[str, Any], model_name: Optional[str] = None):
+    def __init__(self, api_config: Dict[str, Any], model_name: Optional[str] = None,
+                use_circuit_breaker: bool = True, circuit_failure_threshold: int = 3,
+                circuit_recovery_timeout: int = 60):
         """
         Initialize the External API model.
         
         Args:
             api_config: Dictionary containing API configuration
             model_name: Optional model name to use (if specified in the configuration)
+            use_circuit_breaker: Whether to use circuit breaker for API calls
+            circuit_failure_threshold: Number of failures before circuit breaker opens
+            circuit_recovery_timeout: Seconds to wait before recovery attempt
         """
-        super().__init__(None)  # We'll handle authentication differently with external APIs
+        super().__init__()
         
         self.api_config = api_config
-        #self.model_name = model_name or api_config.get("model", "external-api")
+        self.model_name = model_name or api_config.get("model", "external-api")
         self.endpoint = api_config.get("endpoint", "")
         self.headers = api_config.get("headers", {})
         self.method = api_config.get("method", "POST").upper()
         self.params = api_config.get("params", {})
         self.client = None
+        
+        # Set up circuit breaker for API calls if enabled
+        if use_circuit_breaker:
+            self.setup_circuit_breaker(
+                failure_threshold=circuit_failure_threshold,
+                recovery_timeout=circuit_recovery_timeout,
+                provider_name="external-api"
+            )
         
     def initialize(self):
         """Initialize the external API client (validation only)."""
@@ -121,6 +134,41 @@ class ExternalAPIModel(AIModel):
             "model": self.model_name,
             "raw_response": response_data
         }
+    
+    def protected_chat(self, prompt: str, system_prompt: Optional[str] = None, 
+                      temperature: float = 0.7) -> Dict[str, Any]:
+        """
+        Generate a response with circuit breaker protection.
+        
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+            temperature: Sampling temperature
+            
+        Returns:
+            Dictionary with model response
+            
+        Raises:
+            CircuitBreakerError: If the circuit breaker is open
+        """
+        if hasattr(self, 'circuit_breaker'):
+            # If circuit breaker is set up, use it to protect the call
+            try:
+                return self.circuit_breaker(self.chat)(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature
+                )
+            except CircuitBreakerError as e:
+                # Log and re-raise the error
+                raise e
+        else:
+            # No circuit breaker, just call directly
+            return self.chat(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature
+            )
         
     def validate_config(self) -> bool:
         """

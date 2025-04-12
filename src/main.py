@@ -2,7 +2,19 @@
 import os
 import sys
 import argparse
+import platform
 from dotenv import load_dotenv
+
+# Add GPU detection
+try:
+    import torch
+    HAS_CUDA = torch.cuda.is_available()
+    HAS_MPS = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+    GPU_INFO = f"CUDA: {HAS_CUDA}, MPS: {HAS_MPS}" if (HAS_CUDA or HAS_MPS) else "No GPU acceleration available"
+except ImportError:
+    HAS_CUDA = False
+    HAS_MPS = False
+    GPU_INFO = "GPU detection requires PyTorch (not installed)"
 
 from lmtwt.models import get_model
 from lmtwt.attacks.engine import AttackEngine
@@ -23,13 +35,13 @@ def parse_args():
     
     parser.add_argument(
         "--attacker", "-a", type=str, default="gemini",
-        choices=["gemini", "openai", "anthropic"],
+        choices=["gemini", "openai", "anthropic", "huggingface"],
         help="The model provider to use for generating attacks"
     )
     
     parser.add_argument(
         "--target", "-t", type=str, default="openai",
-        choices=["gemini", "openai", "anthropic", "external-api"],
+        choices=["gemini", "openai", "anthropic", "external-api", "huggingface"],
         help="The model provider to target with attacks"
     )
     
@@ -140,6 +152,40 @@ def parse_args():
         help="Maximum number of automatic payload regenerations per session (default: 3)"
     )
     
+    # Add web UI argument
+    parser.add_argument(
+        "--web", action="store_true",
+        help="Launch the web UI"
+    )
+    
+    parser.add_argument(
+        "--web-port", type=int, default=8501,
+        help="Port for the web UI (default: 8501)"
+    )
+    
+    parser.add_argument(
+        "--share", action="store_true",
+        help="Share the web UI with a public URL"
+    )
+    
+    # Add probe mode argument
+    parser.add_argument(
+        "--probe-mode", action="store_true",
+        help="Use probe-inspired attack payloads"
+    )
+    
+    parser.add_argument(
+        "--probe-category", type=str,
+        choices=["dan", "injection", "xss", "glitch", "misleading", "malware", "forbidden_knowledge", "snowball", "all"],
+        default="all",
+        help="Specific probe attack category to use"
+    )
+    
+    parser.add_argument(
+        "--probe-iterations", type=int, default=5,
+        help="Number of probe attack iterations (default: 5)"
+    )
+    
     return parser.parse_args()
 
 
@@ -168,6 +214,24 @@ def main():
     
     # Load configuration
     config = load_config(args.config)
+    
+    # Check if we should launch the web UI
+    if args.web:
+        console.print("\n[bold blue]🌐 Launching LMTWT Web UI[/bold blue]")
+        try:
+            from lmtwt.web import launch_web_ui
+            launch_web_ui(config_path=args.config, port=args.web_port, share=args.share)
+            return
+        except ImportError as e:
+            logger.error(f"Failed to launch web UI: {str(e)}")
+            console.print("[bold red]Error: Failed to launch web UI. Make sure Gradio is installed.[/bold red]")
+            console.print("[bold yellow]Run: pip install gradio>=3.50.0[/bold yellow]")
+            sys.exit(1)
+    
+    # Display system info
+    logger.info(f"System: {platform.system()} {platform.release()}")
+    logger.info(f"Python: {platform.python_version()}")
+    logger.info(f"GPU: {GPU_INFO}")
     
     # Initialize variables
     target_api_config = None
@@ -267,6 +331,99 @@ def main():
             compliance_fallback=not args.no_fallback,
             max_auto_retries=args.max_retries
         )
+        
+        # Handle probe mode
+        if args.probe_mode:
+            console.print("\n[bold red]🔥 PROBE ATTACK MODE ACTIVATED 🔥[/bold red]")
+            console.print("[bold yellow]Using advanced attack payloads inspired by NVIDIA's probe tool[/bold yellow]")
+            
+            from lmtwt.attacks.probeattack import ProbeAttack
+            
+            categories = None if args.probe_category == "all" else [args.probe_category]
+            probe_attack = ProbeAttack(payload_categories=categories)
+            
+            if args.mode == "interactive":
+                console.print("[bold cyan]Interactive Probe Mode - Execute attacks manually[/bold cyan]\n")
+                
+                while True:
+                    # Generate attack options
+                    attacks = probe_attack.generate_attack_sequence(
+                        target_model_name=getattr(target_model, "model_name", "unknown"),
+                        count=min(5, args.probe_iterations)
+                    )
+                    
+                    # Display options
+                    console.print("[bold]Choose an attack to execute:[/bold]")
+                    for i, attack in enumerate(attacks):
+                        console.print(f"[{i+1}] {attack['category'].upper()}: {attack['payload'][:100]}...")
+                    
+                    console.print("[0] Exit")
+                    
+                    # Get user choice
+                    choice = input("\nEnter your choice (0-5): ")
+                    
+                    try:
+                        choice = int(choice)
+                        if choice == 0:
+                            break
+                        elif 1 <= choice <= len(attacks):
+                            selected_attack = attacks[choice-1]
+                            console.print(f"\n[bold]Executing {selected_attack['category'].upper()} attack...[/bold]")
+                            
+                            # Send to model
+                            response = target_model.protected_chat(prompt=selected_attack['payload'])
+                            
+                            # Display response
+                            console.print("\n[bold green]Target Response:[/bold green]")
+                            console.print(response.get("content", "No response"))
+                            console.print("\nPress Enter to continue...")
+                            input()
+                        else:
+                            console.print("[bold red]Invalid choice. Please try again.[/bold red]")
+                    except ValueError:
+                        console.print("[bold red]Invalid input. Please enter a number.[/bold red]")
+            else:
+                # Batch mode
+                console.print(f"[bold cyan]Executing {args.probe_iterations} probe attacks in batch mode[/bold cyan]\n")
+                
+                # Execute attacks for each selected category
+                if args.probe_category == "all":
+                    categories = ["dan", "injection", "xss", "glitch", "misleading"]
+                else:
+                    categories = [args.probe_category]
+                
+                for category in categories:
+                    iterations_per_category = max(1, args.probe_iterations // len(categories))
+                    console.print(f"[bold]Executing {iterations_per_category} attacks for category: {category.upper()}[/bold]")
+                    
+                    results = probe_attack.execute_category_attack(
+                        category=category,
+                        target_model=target_model,
+                        iterations=iterations_per_category,
+                        with_analysis=True
+                    )
+                    
+                    # Display results summary
+                    analysis = results.get("analysis", {})
+                    console.print(f"[bold]Results Summary for {category.upper()}:[/bold]")
+                    console.print(f"Total attacks: {analysis.get('total_attacks', 0)}")
+                    console.print(f"Potential successes: {analysis.get('potential_success_count', 0)}")
+                    console.print(f"Errors: {analysis.get('errors', 0)}")
+                    
+                    if analysis.get("potential_successes", []):
+                        console.print("\n[bold green]Potential Successful Attacks:[/bold green]")
+                        for success in analysis["potential_successes"]:
+                            result_idx = success["response_index"]
+                            indicator = success["indicator"]
+                            
+                            if result_idx < len(results["results"]):
+                                result = results["results"][result_idx]
+                                console.print(f"[bold]Indicator:[/bold] {indicator}")
+                                console.print(f"[bold]Payload:[/bold] {result.get('payload', '')[:100]}...")
+                                console.print(f"[bold]Response:[/bold] {result.get('response', '')[:100]}...")
+                                console.print("\n---\n")
+            
+            return  # Exit after probe mode
         
         # Run in appropriate mode
         if args.mode == "interactive":

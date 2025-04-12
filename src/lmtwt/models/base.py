@@ -9,8 +9,11 @@ logger = logging.getLogger(__name__)
 class AIModel(ABC):
     """Base abstract class for AI model interactions."""
     
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key
+    def __init__(self):
+        """
+        Initialize the base AI model class.
+        """
+        self.api_key = None
         self.model_name = None
         self.history = []
         

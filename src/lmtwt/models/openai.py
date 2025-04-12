@@ -1,16 +1,37 @@
 import os
 from typing import Dict, Optional, Any, List
 from openai import OpenAI
-from .base import AIModel
+from .base import AIModel, CircuitBreakerError
 
 
 class OpenAIModel(AIModel):
     """OpenAI API model implementation."""
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "gpt-4o"):
-        super().__init__(api_key)
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "gpt-4o",
+                use_circuit_breaker: bool = True, circuit_failure_threshold: int = 3,
+                circuit_recovery_timeout: int = 60):
+        """
+        Initialize the OpenAI model.
+        
+        Args:
+            api_key: API key for OpenAI (will use environment variable if not provided)
+            model_name: Name of the model to use
+            use_circuit_breaker: Whether to use circuit breaker for API calls
+            circuit_failure_threshold: Number of failures before circuit breaker opens
+            circuit_recovery_timeout: Seconds to wait before recovery attempt
+        """
+        super().__init__()
+        self.api_key = api_key
         self.model_name = model_name
         self.client = None
+        
+        # Set up circuit breaker for API calls if enabled
+        if use_circuit_breaker:
+            self.setup_circuit_breaker(
+                failure_threshold=circuit_failure_threshold,
+                recovery_timeout=circuit_recovery_timeout,
+                provider_name="openai"
+            )
         
     def initialize(self):
         """Initialize the OpenAI API client."""
@@ -65,4 +86,39 @@ class OpenAIModel(AIModel):
             "content": response_text,
             "model": self.model_name,
             "raw_response": response
-        } 
+        }
+    
+    def protected_chat(self, prompt: str, system_prompt: Optional[str] = None, 
+                      temperature: float = 0.7) -> Dict[str, Any]:
+        """
+        Generate a response with circuit breaker protection.
+        
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+            temperature: Sampling temperature
+            
+        Returns:
+            Dictionary with model response
+            
+        Raises:
+            CircuitBreakerError: If the circuit breaker is open
+        """
+        if hasattr(self, 'circuit_breaker'):
+            # If circuit breaker is set up, use it to protect the call
+            try:
+                return self.circuit_breaker(self.chat)(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature
+                )
+            except CircuitBreakerError as e:
+                # Log and re-raise the error
+                raise e
+        else:
+            # No circuit breaker, just call directly
+            return self.chat(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature
+            ) 

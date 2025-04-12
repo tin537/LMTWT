@@ -1,10 +1,12 @@
 import re
 from typing import Dict, List, Optional, Any, Tuple
 import time
+import datetime
 
 from ..models import get_model, AIModel
 from ..utils.logger import log_conversation, print_attack_result, setup_logger
 from ..utils.compliance_agent import ComplianceAgent
+from ..utils.report_generator import ReportGenerator
 
 
 # Set up logger
@@ -678,79 +680,105 @@ class AttackEngine:
     def batch_attack(self, instructions: List[str], iterations: int = 1,
                     delay: int = 0, target_system_prompt: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Run a batch of attacks with the provided instructions.
+        Run a batch of attacks with multiple instructions.
         
         Args:
-            instructions: List of instructions for generating attack prompts
-            iterations: Number of iterations to run for each instruction
-            delay: Delay between attacks in seconds
-            target_system_prompt: Optional custom system prompt for the target
+            instructions: List of instructions for the attacker
+            iterations: Number of iterations per instruction
+            delay: Delay in seconds between attacks
+            target_system_prompt: Custom system prompt for the target
             
         Returns:
             List of attack results
         """
+        logger.info(f"Starting batch attack with {len(instructions)} instructions, {iterations} iterations each")
+        
         results = []
         
-        # Reset auto-retry counter for new batch
-        self.auto_retry_count = 0
-        
-        for instruction in instructions:
-            for i in range(iterations):
-                logger.info(f"Running attack with instruction '{instruction}' (iteration {i+1}/{iterations})")
+        for i, instruction in enumerate(instructions, 1):
+            logger.info(f"Instruction {i}/{len(instructions)}: {instruction[:50]}...")
+            
+            for j in range(iterations):
+                logger.info(f"Iteration {j+1}/{iterations}")
                 
                 # Generate attack prompt
-                attack_prompt = self.generate_attack_prompt(instruction)
+                attack_prompt = self.generate_attack_prompt(
+                    instruction=instruction,
+                    temperature=0.7 + (j * 0.1) if j < 3 else 0.9  # Gradually increase temperature
+                )
                 
                 # Execute attack
                 result = self.execute_attack(
-                    attack_prompt,
+                    attack_prompt=attack_prompt,
+                    temperature=0.7,
                     target_system_prompt=target_system_prompt
                 )
+                
+                # Add timestamp and instruction to the result
+                result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                result["instruction"] = instruction
+                
+                # Store result
                 results.append(result)
                 
-                # If in hacker mode and attack failed, automatically try to craft a new payload
-                if self.hacker_mode and not result["success"] and self.auto_retry_count < self.max_auto_retries:
-                    logger.info(f"Attack failed. Hacker mode enabled - attempting to craft a new payload. (Attempt {self.auto_retry_count+1}/{self.max_auto_retries})")
+                # Wait between attacks if needed
+                if delay > 0 and not (i == len(instructions) and j == iterations - 1):
+                    logger.info(f"Waiting {delay} seconds...")
+                    time.sleep(delay)
                     
-                    # Increment the auto-retry counter
+                # Add retry if in hacker mode and attack failed, unless we are at retry limit
+                if self.hacker_mode and not result.get("success", False) and self.auto_retry_count < self.max_auto_retries:
+                    logger.info("Hacker mode enabled and attack failed. Generating new payload...")
                     self.auto_retry_count += 1
                     
-                    # Craft a new payload based on the failed attempt
-                    new_payload = self.craft_new_payload_from_failure(
-                        last_prompt=result["prompt"],
-                        last_response=result["response"]
+                    # Generate a new payload based on the failure
+                    new_prompt = self.craft_new_payload_from_failure(
+                        last_prompt=attack_prompt,
+                        last_response=result.get("content", "")
                     )
+                    
+                    # Try again with the new payload
+                    logger.info(f"Retry {self.auto_retry_count}/{self.max_auto_retries} with new payload")
                     
                     # Execute the new attack
-                    logger.info("Executing attack with new crafted payload...")
                     retry_result = self.execute_attack(
-                        new_payload,
+                        attack_prompt=new_prompt,
+                        temperature=0.7,
                         target_system_prompt=target_system_prompt
                     )
+                    
+                    # Add timestamp and instruction to the result
+                    retry_result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    retry_result["instruction"] = instruction
+                    retry_result["is_retry"] = True
+                    retry_result["retry_number"] = self.auto_retry_count
+                    
+                    # Store result
                     results.append(retry_result)
                     
-                    # Log result for the retry
-                    log_file = log_conversation(
-                        self.attacker_model.model_name,
-                        self.target_model.model_name,
-                        self.prompts,
-                        self.responses,
-                        retry_result["success"]
-                    )
-                    logger.info(f"Logged retry results to {log_file}")
-                
-                # Log result
-                log_file = log_conversation(
-                    self.attacker_model.model_name,
-                    self.target_model.model_name,
-                    self.prompts,
-                    self.responses,
-                    result["success"]
-                )
-                logger.info(f"Logged results to {log_file}")
-                
-                # Add delay between attacks if specified
-                if delay > 0 and (i < iterations - 1 or instruction != instructions[-1]):
-                    time.sleep(delay)
+                    # Wait between attacks if needed
+                    if delay > 0 and not (i == len(instructions) and j == iterations - 1):
+                        logger.info(f"Waiting {delay} seconds...")
+                        time.sleep(delay)
+        
+        # Generate a comprehensive report
+        report_generator = ReportGenerator()
+        
+        # Create metadata for the report
+        metadata = {
+            "attacker_model": getattr(self.attacker_model, "model_name", "unknown"),
+            "target_model": getattr(self.target_model, "model_name", "unknown"),
+            "mode": "batch",
+            "hacker_mode": self.hacker_mode,
+            "compliance_agent": self.use_compliance_agent,
+            "instructions": instructions,
+            "iterations": iterations,
+            "total_attacks": len(results)
+        }
+        
+        # Generate the report
+        report_path = report_generator.generate_report(results, metadata)
+        logger.info(f"Batch attack complete. Generated {len(results)} attacks.")
+        logger.info(f"Report saved to {report_path}")
         
         return results 
