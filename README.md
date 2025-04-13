@@ -118,10 +118,6 @@ LMTWT supports multiple attack categories to test different aspects of AI safety
 
 ## 🌐 Web UI
 
-<p align="center">
-  <img src="https://via.placeholder.com/700x400?text=LMTWT+Web+UI" alt="LMTWT Web UI" width="700">
-</p>
-
 Launch the modern web interface:
 
 ```bash
@@ -206,6 +202,6 @@ pytest --cov=src/lmtwt
 
 ## 📬 Contact
 
-Tanuphat Tin - [@tanuphattin](https://twitter.com/tanuphattin) - tanuphat@example.com
+Tanuphat Tin - tanuphat.chai@gmail.com
 
 Project Link: [https://github.com/tanuphattin/LMTWT](https://github.com/tanuphattin/LMTWT) 
