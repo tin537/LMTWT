@@ -1,7 +1,7 @@
 # LMTWT - Let Me Talk With Them
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python 3.8+">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT">
   <img src="https://img.shields.io/badge/Contributions-Welcome-brightgreen" alt="Contributions: Welcome">
 </p>
