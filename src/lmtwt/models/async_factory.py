@@ -6,9 +6,17 @@ from typing import Any
 
 from .async_anthropic import AsyncAnthropicModel
 from .async_base import AsyncAIModel
-from .async_external_api import AsyncExternalAPIModel
 from .async_gemini import AsyncGeminiModel
 from .async_openai import AsyncOpenAIModel
+from .external import HTTPExternalModel, SSEExternalModel, WebSocketExternalModel
+
+_EXTERNAL_PROTOCOLS = {
+    "http": HTTPExternalModel,
+    "sse": SSEExternalModel,
+    "websocket": WebSocketExternalModel,
+    "ws": WebSocketExternalModel,
+    "wss": WebSocketExternalModel,
+}
 
 __all__ = ["async_get_model"]
 
@@ -44,10 +52,17 @@ def async_get_model(
     if p == "external-api":
         if not api_config:
             raise ValueError("api_config is required for external-api targets")
+        protocol = api_config.get("protocol", "http").lower()
+        cls = _EXTERNAL_PROTOCOLS.get(protocol)
+        if cls is None:
+            raise ValueError(
+                f"Unknown external-api protocol: {protocol!r}. "
+                f"Choose one of: {sorted(_EXTERNAL_PROTOCOLS)}"
+            )
         kwargs = {"api_config": api_config}
         if model_name:
             kwargs["model_name"] = model_name
-        return AsyncExternalAPIModel(**kwargs)
+        return cls(**kwargs)
 
     if p == "huggingface":
         # Imported here so torch/transformers stay optional at install time.

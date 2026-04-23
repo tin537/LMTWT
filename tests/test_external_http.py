@@ -1,31 +1,33 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from lmtwt.models.async_external_api import AsyncExternalAPIModel, _extract
 from lmtwt.models.conversation import Conversation
+from lmtwt.models.external.base import extract
+from lmtwt.models.external.http import HTTPExternalModel
 
 
 def test_extract_handles_dict_path():
     data = {"choices": [{"message": {"content": "hello"}}]}
-    assert _extract(data, "choices.0.message.content") == "hello"
+    assert extract(data, "choices.0.message.content") == "hello"
 
 
 def test_extract_returns_empty_on_miss():
-    assert _extract({"a": 1}, "b.c") == ""
+    assert extract({"a": 1}, "b.c") == ""
 
 
 def test_extract_serializes_non_string():
-    assert _extract({"x": [1, 2]}, "x") == "[1, 2]"
+    assert extract({"x": [1, 2]}, "x") == "[1, 2]"
 
 
 def test_init_requires_endpoint():
     with pytest.raises(ValueError, match="endpoint"):
-        AsyncExternalAPIModel(api_config={})
+        HTTPExternalModel(api_config={})
 
 
 async def test_chat_posts_payload_and_extracts_response():
-    model = AsyncExternalAPIModel(
+    model = HTTPExternalModel(
         api_config={
             "endpoint": "https://api.example.com/v1/chat",
             "method": "POST",
@@ -48,8 +50,7 @@ async def test_chat_posts_payload_and_extracts_response():
     fake_client.post = AsyncMock(return_value=fake_response)
 
     with patch(
-        "lmtwt.models.async_external_api.httpx.AsyncClient",
-        return_value=fake_client,
+        "lmtwt.models.external.http.httpx.AsyncClient", return_value=fake_client
     ):
         conv = Conversation().with_system("be helpful").append("user", "what's up?")
         response = await model.chat(conv, temperature=0.5)
@@ -67,12 +68,10 @@ async def test_chat_posts_payload_and_extracts_response():
 
 
 async def test_chat_handles_plain_text_response():
-    model = AsyncExternalAPIModel(
-        api_config={"endpoint": "https://api.example.com/echo"}
-    )
+    model = HTTPExternalModel(api_config={"endpoint": "https://api.example.com/echo"})
 
     fake_response = MagicMock()
-    fake_response.json = MagicMock(side_effect=__import__("json").JSONDecodeError("x", "y", 0))
+    fake_response.json = MagicMock(side_effect=json.JSONDecodeError("x", "y", 0))
     fake_response.text = "raw plain text"
     fake_response.raise_for_status = MagicMock()
 
@@ -80,8 +79,7 @@ async def test_chat_handles_plain_text_response():
     fake_client.post = AsyncMock(return_value=fake_response)
 
     with patch(
-        "lmtwt.models.async_external_api.httpx.AsyncClient",
-        return_value=fake_client,
+        "lmtwt.models.external.http.httpx.AsyncClient", return_value=fake_client
     ):
         response = await model.chat(Conversation().append("user", "hi"))
 

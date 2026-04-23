@@ -1,10 +1,10 @@
 import pytest
 
 from lmtwt.models.async_anthropic import AsyncAnthropicModel
-from lmtwt.models.async_external_api import AsyncExternalAPIModel
 from lmtwt.models.async_factory import async_get_model
 from lmtwt.models.async_gemini import AsyncGeminiModel
 from lmtwt.models.async_openai import AsyncOpenAIModel
+from lmtwt.models.external.http import HTTPExternalModel
 
 
 def test_factory_picks_anthropic():
@@ -31,7 +31,7 @@ def test_factory_external_api_requires_config():
 
 def test_factory_builds_external_api():
     m = async_get_model("external-api", api_config={"endpoint": "https://x.example.com/"})
-    assert isinstance(m, AsyncExternalAPIModel)
+    assert isinstance(m, HTTPExternalModel)
 
 
 def test_factory_rejects_unknown_provider():
