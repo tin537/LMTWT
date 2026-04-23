@@ -123,18 +123,18 @@ engagement, not a dependency on third-party academic benchmarks.
 | **Confidence intervals** | ⬜ — run probes N times, report verdict variance. Next sub-landing in 5.2. |
 | **LLM-backed refusal grader** | ⬜ — current grader is regex-only; an LLM second-opinion grader is future work. |
 
-### 5.3 Discovery engine ⬜
+### 5.3 Discovery engine 🚧
 
 This is where LMTWT goes beyond running probes — it **generates new attacks
 during a run** and the corpus grows itself.
 
-| Item | What |
+| Item | Status |
 |---|---|
-| **Refusal fingerprinting** | First N turns probe diverse prompts, derive `target-fingerprint.json`: filter type, refusal templates, sensitive topics. Subsequent attacks target the gaps. |
-| **Adaptive attacker** | Attacker reads target's last 3 refusals, identifies the rejection mechanism (keyword / embedding / policy), generates a probe designed to bypass *that* mechanism. Module: `src/lmtwt/attacks/adaptive.py`. |
-| **LMTWT-Climb mutation engine** | Take an almost-successful probe and mutate (synonyms, restructure, persona, distractors). Hill-climb against the judge. Our own search loop, not PAIR/TAP. |
-| **Cross-pollination** | Probe A succeeds against bot X → auto-generate variants for bots Y / Z. Feedback loop fills the corpus. |
-| **Self-play probe generation** | Two attackers debate: one writes a probe, the other plays target and predicts refusal, first revises. Output: probes pre-tested for likely success, stored in corpus. |
+| **Refusal fingerprinting** | ✅ — `src/lmtwt/discovery/fingerprint.py`; 9-probe calibration set (4 refusal-trigger × 4 obfuscation axes + 1 multilingual trigger + 4 stress probes), per-axis refusal rates, weak-axis identification, refusal-style classifier (`hard` / `soft` / `leaky` / `none`), policy-leak detection, response timing/length stats. CLI: `--fingerprint --fingerprint-out target.json`. |
+| **Adaptive attacker** | ✅ — `src/lmtwt/discovery/adaptive.py`; `AdaptiveAttacker` reads the fingerprint, picks the weak obfuscation axis, asks the attacker LLM for N fresh probes targeting that gap, returns `Probe`-shaped objects that flow through the existing catalog runner. CLI: `--probe-catalog --adaptive --fingerprint-in target.json`. |
+| **LMTWT-Climb mutation engine** | ⬜ — Take an almost-successful probe and mutate (synonyms, restructure, persona, distractors). Hill-climb against the judge. Our own search loop, not PAIR/TAP. |
+| **Cross-pollination** | ⬜ — Probe A succeeds against bot X → auto-generate variants for bots Y / Z. Feedback loop fills the corpus. |
+| **Self-play probe generation** | ⬜ — Two attackers debate: one writes a probe, the other plays target and predicts refusal, first revises. Output: probes pre-tested for likely success, stored in corpus. |
 
 ### 5.4 LLM-chatbot attack surface ⬜
 

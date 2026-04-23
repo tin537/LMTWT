@@ -31,6 +31,12 @@ from .attacks.tools import (
     get_vector,
     list_vectors,
 )
+from .discovery import (
+    AdaptiveAttacker,
+    fingerprint_target,
+    load_fingerprint,
+    save_fingerprint,
+)
 from .models.async_factory import async_get_model
 from .probes import load_corpus
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
@@ -150,6 +156,18 @@ def parse_args() -> argparse.Namespace:
                         "critical,high,medium,low")
     p.add_argument("--list-probes", action="store_true",
                    help="List every probe in the corpus and exit")
+    # Phase 5.3 — discovery / adaptive attacker
+    p.add_argument("--fingerprint", action="store_true",
+                   help="Run target fingerprinting (calibration probes) and exit")
+    p.add_argument("--fingerprint-out", type=str, default="target-fingerprint.json",
+                   help="Where to write the fingerprint JSON (default: ./target-fingerprint.json)")
+    p.add_argument("--fingerprint-in", type=str, default=None,
+                   help="Use a pre-saved fingerprint instead of re-running calibration")
+    p.add_argument("--adaptive", action="store_true",
+                   help="In --probe-catalog mode, also generate adaptive probes "
+                        "from the fingerprint via the attacker model")
+    p.add_argument("--adaptive-n", type=int, default=3,
+                   help="Number of adaptive probes to generate (default: 3)")
     return p.parse_args()
 
 
@@ -483,6 +501,43 @@ async def _run_probe(args, target_model) -> None:
         )
 
 
+async def _resolve_fingerprint(args, target_model):
+    """For ``--adaptive``: reuse a saved fingerprint or run calibration now."""
+    if args.fingerprint_in:
+        console.print(f"[dim]Loading fingerprint from {args.fingerprint_in}[/dim]")
+        return load_fingerprint(args.fingerprint_in)
+    console.print("[dim]No --fingerprint-in given; calibrating target now...[/dim]")
+    fp = await fingerprint_target(
+        target_model, target_system_prompt=args.system_prompt
+    )
+    save_fingerprint(fp, args.fingerprint_out)
+    console.print(
+        f"[dim]Calibration complete (weak axis: "
+        f"{fp.weak_obfuscation_axis}). Saved to {args.fingerprint_out}[/dim]\n"
+    )
+    return fp
+
+
+async def _run_fingerprint(args, target_model) -> None:
+    console.print("\n[bold cyan]🔍 FINGERPRINTING TARGET[/bold cyan]")
+    fp = await fingerprint_target(
+        target_model, target_system_prompt=args.system_prompt
+    )
+    save_fingerprint(fp, args.fingerprint_out)
+    console.print(
+        f"Target:           [bold]{fp.target_model}[/bold]\n"
+        f"Refusal style:    [bold]{fp.refusal_style}[/bold]\n"
+        f"Policy leak:      [bold]{fp.policy_leak_observed}[/bold]\n"
+        f"Weak axis:        [bold red]{fp.weak_obfuscation_axis}[/bold red]\n"
+        f"Avg resp length:  {fp.avg_response_length:.0f} chars\n"
+        f"Avg resp time:    {fp.avg_response_seconds:.2f}s\n"
+    )
+    console.print("[bold]Per-axis refusal rates:[/bold]")
+    for axis, rate in sorted(fp.axis_refusal_rates.items()):
+        console.print(f"  {axis:13} {rate:.0%}")
+    console.print(f"\n[dim]Wrote fingerprint to {args.fingerprint_out}[/dim]")
+
+
 async def _run_probe_catalog(args, target_model) -> None:
     console.print("\n[bold red]🔥 PROBE CATALOG (LMTWT-native corpus)[/bold red]")
 
@@ -495,13 +550,36 @@ async def _run_probe_catalog(args, target_model) -> None:
         coordinate_filter=args.probe_coordinate,
         severity_filter=severity_filter,
     )
+
+    # --adaptive: load or build a fingerprint, then ask the attacker model
+    # for fresh probes that target the fingerprint's gaps.
+    adapted = []
+    if args.adaptive:
+        fp = await _resolve_fingerprint(args, target_model)
+        attacker_api_key = os.getenv(f"{args.attacker.upper()}_API_KEY")
+        attacker_model = async_get_model(
+            args.attacker,
+            api_key=attacker_api_key,
+            model_name=args.attacker_model,
+            **_transport_kwargs(args),
+        )
+        adapter = AdaptiveAttacker(attacker_model)
+        adapted = await adapter.generate(fp, n=args.adaptive_n)
+        if adapted:
+            console.print(
+                f"[cyan]Adaptive attacker generated {len(adapted)} probe(s) "
+                f"targeting weak axis '{fp.weak_obfuscation_axis}'[/cyan]"
+            )
+            corpus = corpus + [a.probe for a in adapted]
+
     if not corpus:
         console.print("[yellow]No probes matched the filter; nothing to run.[/yellow]")
         return
 
     console.print(
         f"Loaded [bold]{len(corpus)}[/bold] probes "
-        f"(filter={args.probe_coordinate or '*'}, "
+        f"({len(adapted)} adaptive, {len(corpus) - len(adapted)} static; "
+        f"filter={args.probe_coordinate or '*'}, "
         f"severity={args.probe_severity or 'any'})\n"
     )
 
@@ -625,6 +703,10 @@ async def async_main() -> None:
         api_config=target_api_config,
         **_transport_kwargs(args),
     )
+
+    if args.fingerprint:
+        await _run_fingerprint(args, target_model)
+        return
 
     if args.probe_catalog:
         await _run_probe_catalog(args, target_model)

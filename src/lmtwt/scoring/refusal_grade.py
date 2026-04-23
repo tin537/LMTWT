@@ -42,8 +42,10 @@ _SOFT_ALTERNATIVE = [
     r"(?i)(if you'?re interested in|for a similar)",
 ]
 _POLICY_LEAK = [
-    r"(?i)(company|corporate|operator|business) policy (prohibits|restricts|doesn'?t allow)",
-    r"(?i)(my |the )?(system prompt|instructions|guidelines) (say|tell|state|require)",
+    r"(?i)(company|corporate|operator|business) policy (prohibits|restricts|doesn'?t allow|forbids?|disallows?)",
+    # Possessive-anchored: 'my system prompt ...' or 'my instructions ...'.
+    r"(?i)\bmy (system prompt|instructions|guidelines|rules)\s+\w+",
+    r"(?i)\b(system prompt|guidelines) (say|tell|state|require|prohibit|restrict|forbid|disallow)",
     r"(?i)i was (told|instructed|configured|programmed) (not to|to not|to avoid)",
     r"(?i)content filter (blocked|flagged|caught)",
     r"(?i)trigger(ed)? (word|phrase|keyword)",
