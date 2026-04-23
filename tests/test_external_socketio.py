@@ -12,7 +12,6 @@ from lmtwt.models.external.socketio import (
     _set_path,
 )
 
-
 # ----------------------------------------------------------------- helpers
 
 

@@ -36,18 +36,19 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from .._transport import websocket_ssl_context
+from ..async_base import ChatResponse, Chunk
+from ..conversation import Conversation
+from .base import BaseExternalModel, extract
+
 _DEBUG = os.environ.get("LMTWT_SOCKETIO_DEBUG") in ("1", "true", "yes")
 
 
 def _trace(direction: str, frame: str) -> None:
     if _DEBUG:
-        snippet = frame if len(frame) <= 500 else frame[:500] + f"...<+{len(frame)-500}b>"
+        snippet = frame if len(frame) <= 500 else frame[:500] + f"...<+{len(frame) - 500}b>"
         print(f"[socketio {direction}] {snippet}", file=sys.stderr, flush=True)
 
-from .._transport import websocket_ssl_context
-from ..async_base import ChatResponse, Chunk
-from ..conversation import Conversation
-from .base import BaseExternalModel, extract
 
 _RETRYABLE = (ConnectionClosed, OSError, asyncio.TimeoutError)
 
