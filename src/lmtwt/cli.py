@@ -75,6 +75,13 @@ def parse_args() -> argparse.Namespace:
                    choices=["gemini", "openai", "anthropic"],
                    help="Provider used for the LLM judge")
     p.add_argument("--max-retries", type=int, default=3)
+    # Proxy / TLS — for routing through Burp, mitmproxy, ZAP, corporate egress
+    p.add_argument("--proxy", type=str,
+                   help="HTTP/SOCKS proxy URL applied to attacker, target, judge")
+    p.add_argument("--ca-bundle", type=str,
+                   help="Path to PEM cert bundle (e.g. Burp's cacert.pem)")
+    p.add_argument("--insecure", action="store_true",
+                   help="Skip TLS verification (verify=False) — dangerous")
     # Web
     p.add_argument("--web", action="store_true")
     p.add_argument("--web-port", type=int, default=8501)
@@ -96,6 +103,14 @@ def list_templates_and_exit() -> None:
     print()
 
 
+def _transport_kwargs(args) -> dict:
+    return {
+        "proxy": args.proxy,
+        "ca_bundle": args.ca_bundle,
+        "verify": not args.insecure,
+    }
+
+
 async def _build_judge(args):
     """Return an ``AsyncJudge``. ``--compliance-agent`` is a back-compat shim."""
     style = "ensemble" if args.compliance_agent else args.judge
@@ -103,7 +118,9 @@ async def _build_judge(args):
         return RegexJudge()
 
     api_key = os.getenv(f"{args.compliance_provider.upper()}_API_KEY")
-    judge_model = async_get_model(args.compliance_provider, api_key=api_key)
+    judge_model = async_get_model(
+        args.compliance_provider, api_key=api_key, **_transport_kwargs(args)
+    )
     llm_judge = LLMJudge(judge_model)
     return EnsembleJudge(llm_judge) if style == "ensemble" else llm_judge
 
@@ -263,6 +280,7 @@ async def async_main() -> None:
         api_key=target_api_key,
         model_name=args.target_model,
         api_config=target_api_config,
+        **_transport_kwargs(args),
     )
 
     if args.probe_mode:
@@ -274,6 +292,7 @@ async def async_main() -> None:
         args.attacker,
         api_key=attacker_api_key,
         model_name=args.attacker_model,
+        **_transport_kwargs(args),
     )
 
     judge = await _build_judge(args)

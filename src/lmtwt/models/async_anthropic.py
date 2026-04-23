@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 
 import anthropic
+import httpx
 from aiolimiter import AsyncLimiter
 from tenacity import (
     AsyncRetrying,
@@ -14,6 +15,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from ._transport import httpx_client_kwargs
 from .async_base import AsyncAIModel, ChatResponse, Chunk, Usage
 from .conversation import Conversation
 
@@ -42,10 +44,16 @@ class AsyncAnthropicModel(AsyncAIModel):
         time_period: float = 60.0,
         max_attempts: int = 3,
         cache_system: bool = True,
+        proxy: str | None = None,
+        ca_bundle: str | None = None,
+        verify: bool = True,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
         self.cache_system = cache_system
+        self.proxy = proxy
+        self.ca_bundle = ca_bundle
+        self.verify = verify
         self._client: anthropic.AsyncAnthropic | None = None
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._retry = AsyncRetrying(
@@ -61,7 +69,12 @@ class AsyncAnthropicModel(AsyncAIModel):
         api_key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("Anthropic API key not provided and ANTHROPIC_API_KEY not set")
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        client_kwargs: dict = {"api_key": api_key}
+        if self.proxy or self.ca_bundle or not self.verify:
+            client_kwargs["http_client"] = httpx.AsyncClient(
+                **httpx_client_kwargs(self.proxy, self.ca_bundle, self.verify)
+            )
+        self._client = anthropic.AsyncAnthropic(**client_kwargs)
 
     def _build_kwargs(
         self,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 
+import httpx
 import openai
 from aiolimiter import AsyncLimiter
 from tenacity import (
@@ -14,6 +15,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from ._transport import httpx_client_kwargs
 from .async_base import AsyncAIModel, ChatResponse, Chunk, Usage
 from .conversation import Conversation
 
@@ -36,9 +38,15 @@ class AsyncOpenAIModel(AsyncAIModel):
         max_rate: int = 60,
         time_period: float = 60.0,
         max_attempts: int = 3,
+        proxy: str | None = None,
+        ca_bundle: str | None = None,
+        verify: bool = True,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
+        self.proxy = proxy
+        self.ca_bundle = ca_bundle
+        self.verify = verify
         self._client: openai.AsyncOpenAI | None = None
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._retry = AsyncRetrying(
@@ -54,7 +62,12 @@ class AsyncOpenAIModel(AsyncAIModel):
         api_key = self.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OpenAI API key not provided and OPENAI_API_KEY not set")
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        client_kwargs: dict = {"api_key": api_key}
+        if self.proxy or self.ca_bundle or not self.verify:
+            client_kwargs["http_client"] = httpx.AsyncClient(
+                **httpx_client_kwargs(self.proxy, self.ca_bundle, self.verify)
+            )
+        self._client = openai.AsyncOpenAI(**client_kwargs)
 
     @staticmethod
     def _usage_from(raw_usage) -> Usage | None:

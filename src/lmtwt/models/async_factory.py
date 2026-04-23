@@ -1,4 +1,4 @@
-"""Async-side factory. Sibling of the sync ``get_model`` in ``models/__init__.py``."""
+"""Async-side factory."""
 
 from __future__ import annotations
 
@@ -26,25 +26,40 @@ def async_get_model(
     api_key: str | None = None,
     model_name: str | None = None,
     api_config: dict[str, Any] | None = None,
+    *,
+    proxy: str | None = None,
+    ca_bundle: str | None = None,
+    verify: bool = True,
 ) -> AsyncAIModel:
-    """Construct an async provider for the given name. Mirrors ``get_model``."""
+    """Construct an async provider for the given name.
+
+    ``proxy``, ``ca_bundle``, and ``verify`` are forwarded to every provider.
+    For ``external-api`` targets the corresponding ``api_config`` keys
+    (``proxy``, ``ca_bundle``, ``insecure``) take precedence.
+    """
 
     p = provider.lower()
 
+    transport_kwargs: dict[str, Any] = {
+        "proxy": proxy,
+        "ca_bundle": ca_bundle,
+        "verify": verify,
+    }
+
     if p == "gemini":
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key, **transport_kwargs}
         if model_name:
             kwargs["model_name"] = model_name
         return AsyncGeminiModel(**kwargs)
 
     if p == "openai":
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": api_key, **transport_kwargs}
         if model_name:
             kwargs["model_name"] = model_name
         return AsyncOpenAIModel(**kwargs)
 
     if p == "anthropic":
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": api_key, **transport_kwargs}
         if model_name:
             kwargs["model_name"] = model_name
         return AsyncAnthropicModel(**kwargs)
@@ -59,7 +74,7 @@ def async_get_model(
                 f"Unknown external-api protocol: {protocol!r}. "
                 f"Choose one of: {sorted(_EXTERNAL_PROTOCOLS)}"
             )
-        kwargs = {"api_config": api_config}
+        kwargs = {"api_config": api_config, **transport_kwargs}
         if model_name:
             kwargs["model_name"] = model_name
         return cls(**kwargs)
@@ -71,6 +86,7 @@ def async_get_model(
         kwargs = {"api_key": api_key}
         if model_name:
             kwargs["model_name"] = model_name
+        # HuggingFace local inference doesn't go through proxies; ignored.
         return AsyncHuggingFaceModel(**kwargs)
 
     raise ValueError(f"Unsupported provider: {provider}")

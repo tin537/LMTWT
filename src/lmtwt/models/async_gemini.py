@@ -40,9 +40,15 @@ class AsyncGeminiModel(AsyncAIModel):
         max_rate: int = 60,
         time_period: float = 60.0,
         max_attempts: int = 3,
+        proxy: str | None = None,
+        ca_bundle: str | None = None,
+        verify: bool = True,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
+        self.proxy = proxy
+        self.ca_bundle = ca_bundle
+        self.verify = verify
         self._client: genai.Client | None = None
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._retry = AsyncRetrying(
@@ -58,7 +64,16 @@ class AsyncGeminiModel(AsyncAIModel):
         api_key = self.api_key or os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("Gemini API key not provided and GEMINI_API_KEY not set")
-        self._client = genai.Client(api_key=api_key)
+        client_kwargs: dict = {"api_key": api_key}
+        if self.proxy or self.ca_bundle or not self.verify:
+            from ._transport import httpx_client_kwargs
+
+            client_kwargs["http_options"] = genai_types.HttpOptions(
+                async_client_args=httpx_client_kwargs(
+                    self.proxy, self.ca_bundle, self.verify
+                )
+            )
+        self._client = genai.Client(**client_kwargs)
 
     def _build_config(
         self,

@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from .._transport import httpx_client_kwargs
 from ..async_base import ChatResponse, Chunk
 from ..conversation import Conversation
 from .base import BaseExternalModel, extract, matches_done_signal
@@ -41,6 +42,7 @@ class SSEExternalModel(BaseExternalModel):
             headers={**self.headers, "Accept": "text/event-stream"},
             params=self.params,
             timeout=self.timeout,
+            **httpx_client_kwargs(self.proxy, self.ca_bundle, self.verify),
         )
 
     async def _iter_events(

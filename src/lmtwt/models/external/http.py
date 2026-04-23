@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from .._transport import httpx_client_kwargs
 from ..async_base import ChatResponse, Chunk
 from ..conversation import Conversation
 from .base import BaseExternalModel, extract
@@ -33,7 +34,10 @@ class HTTPExternalModel(BaseExternalModel):
         if self._client is not None:
             return
         self._client = httpx.AsyncClient(
-            headers=self.headers, params=self.params, timeout=self.timeout
+            headers=self.headers,
+            params=self.params,
+            timeout=self.timeout,
+            **httpx_client_kwargs(self.proxy, self.ca_bundle, self.verify),
         )
 
     async def chat(

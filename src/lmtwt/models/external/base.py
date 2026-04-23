@@ -65,6 +65,9 @@ class BaseExternalModel(AsyncAIModel):
         max_attempts: int = 3,
         timeout: float = 30.0,
         retryable_exceptions: tuple[type[BaseException], ...] = (),
+        proxy: str | None = None,
+        ca_bundle: str | None = None,
+        verify: bool = True,
     ) -> None:
         if not api_config.get("endpoint"):
             raise ValueError("api_config must include 'endpoint'")
@@ -74,6 +77,10 @@ class BaseExternalModel(AsyncAIModel):
         self.headers = api_config.get("headers", {})
         self.params = api_config.get("params", {})
         self.timeout = timeout
+        # Per-target overrides win over CLI-level kwargs.
+        self.proxy = api_config.get("proxy", proxy)
+        self.ca_bundle = api_config.get("ca_bundle", ca_bundle)
+        self.verify = not api_config.get("insecure", False) if "insecure" in api_config else verify
 
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._retry = AsyncRetrying(

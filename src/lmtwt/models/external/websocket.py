@@ -20,6 +20,7 @@ from typing import Any
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from .._transport import websocket_ssl_context
 from ..async_base import ChatResponse, Chunk
 from ..conversation import Conversation
 from .base import BaseExternalModel, extract, matches_done_signal
@@ -53,7 +54,14 @@ class WebSocketExternalModel(BaseExternalModel):
         }
         if self.subprotocol:
             kwargs["subprotocols"] = [self.subprotocol]
-        sock = await websockets.connect(self.endpoint, **{k: v for k, v in kwargs.items() if v is not None})
+        if self.proxy:
+            kwargs["proxy"] = self.proxy
+        ssl_ctx = websocket_ssl_context(self.ca_bundle, self.verify)
+        if ssl_ctx is not None:
+            kwargs["ssl"] = ssl_ctx
+        sock = await websockets.connect(
+            self.endpoint, **{k: v for k, v in kwargs.items() if v is not None}
+        )
         if self.auth_message is not None:
             await sock.send(self._encode(self.auth_message))
         return sock
