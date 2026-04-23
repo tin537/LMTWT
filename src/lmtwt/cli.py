@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 
 from .attacks.async_engine import AsyncAttackEngine, AttackResult
 from .attacks.async_probe import AsyncProbeAttack
+from .attacks.flows import (
+    BUILT_IN_FLOWS,
+    MultiTurnRunner,
+    get_flow,
+    list_flows,
+    turn_log_to_attack_result,
+)
 from .attacks.templates import get_template_instruction, list_attack_templates
 from .models.async_factory import async_get_model
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge
@@ -51,10 +58,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attacker-model", type=str)
     p.add_argument("--target-model", type=str)
     p.add_argument("--mode", "-m", type=str, default="interactive",
-                   choices=["interactive", "batch", "template"])
+                   choices=["interactive", "batch", "template", "multi-turn"])
     p.add_argument("--instruction", "-i", type=str, action="append")
     p.add_argument("--template", type=str, action="append")
     p.add_argument("--list-templates", action="store_true")
+    p.add_argument("--flow", type=str,
+                   help=f"Multi-turn flow id (one of: {', '.join(BUILT_IN_FLOWS.keys())})")
+    p.add_argument("--list-flows", action="store_true")
     p.add_argument("--iterations", type=int, default=1)
     p.add_argument("--delay", type=float, default=1.0)
     p.add_argument("--concurrency", type=int, default=1,
@@ -100,6 +110,14 @@ def list_templates_and_exit() -> None:
     print("---------------------------")
     for tpl in list_attack_templates():
         print(f"{tpl['id']}: {tpl['name']}")
+    print()
+
+
+def list_flows_and_exit() -> None:
+    print("\nAvailable Multi-turn Flows:")
+    print("---------------------------")
+    for f in list_flows():
+        print(f"{f['name']} ({f['steps']} steps): {f['description']}")
     print()
 
 
@@ -191,6 +209,52 @@ async def _run_batch(engine: AsyncAttackEngine, args, instructions: list[str]) -
     )
 
 
+async def _run_multi_turn(args, attacker, target, judge, flow) -> None:
+    runner = MultiTurnRunner(
+        attacker, target, judge=judge, target_system_prompt=args.system_prompt
+    )
+    console.print(
+        f"\n[bold magenta]Flow:[/bold magenta] {flow.name} "
+        f"({len(flow.steps)} steps)"
+    )
+
+    results = await runner.run_many(
+        flow, args.instruction, concurrency=args.concurrency
+    )
+
+    successes = sum(1 for r in results if r.final_success)
+    console.print(
+        f"\n[bold]Multi-turn complete: {successes}/{len(results)} flows succeeded[/bold]\n"
+    )
+
+    # Per-flow recap on stdout; full per-turn detail flushed to the report.
+    for r in results:
+        marker = "[green]SUCCESS[/green]" if r.final_success else "[yellow]FAILED[/yellow]"
+        console.print(
+            f"{marker}  {r.flow}  ({len(r.turns)} turns)  — {r.final_reason}"
+        )
+
+    # Flatten turn logs into AttackResult dicts for ReportGenerator.
+    flat_results = []
+    for r in results:
+        for log in r.turns:
+            flat_results.append(_result_to_legacy_dict(
+                turn_log_to_attack_result(log, r.instruction)
+            ))
+
+    metadata = {
+        "attacker_model": getattr(attacker, "model_name", "unknown"),
+        "target_model": getattr(target, "model_name", "unknown"),
+        "mode": "multi-turn",
+        "flow": flow.name,
+        "instructions": args.instruction,
+        "judge": type(judge).__name__,
+        "total_attacks": len(flat_results),
+        "successes": successes,
+    }
+    ReportGenerator().generate_report(flat_results, metadata)
+
+
 async def _run_probe(args, target_model) -> None:
     console.print("\n[bold red]🔥 PROBE MODE[/bold red]")
 
@@ -235,6 +299,9 @@ async def async_main() -> None:
 
     if args.list_templates:
         list_templates_and_exit()
+        return
+    if args.list_flows:
+        list_flows_and_exit()
         return
 
     config = load_config(args.config)
@@ -324,6 +391,18 @@ async def async_main() -> None:
             logger.error("No valid templates resolved")
             sys.exit(1)
         await _run_batch(engine, args, instructions)
+    elif args.mode == "multi-turn":
+        if not args.flow:
+            logger.error("Multi-turn mode requires --flow (use --list-flows)")
+            sys.exit(1)
+        flow = get_flow(args.flow)
+        if flow is None:
+            logger.error(f"Unknown flow: {args.flow}. Use --list-flows.")
+            sys.exit(1)
+        if not args.instruction:
+            logger.error("Multi-turn mode requires at least one --instruction (the goal)")
+            sys.exit(1)
+        await _run_multi_turn(args, attacker_model, target_model, judge, flow)
 
 
 def main() -> None:

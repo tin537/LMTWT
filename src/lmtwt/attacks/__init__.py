@@ -2,6 +2,15 @@
 
 from .async_engine import AsyncAttackEngine, AttackResult
 from .async_probe import AsyncProbeAttack
+from .flows import (
+    BUILT_IN_FLOWS,
+    CrescendoStep,
+    MultiTurnFlow,
+    MultiTurnResult,
+    MultiTurnRunner,
+    get_flow,
+    list_flows,
+)
 from .templates import (
     ATTACK_TEMPLATES,
     get_attack_template,
@@ -11,10 +20,17 @@ from .templates import (
 
 __all__ = [
     "ATTACK_TEMPLATES",
+    "BUILT_IN_FLOWS",
     "AsyncAttackEngine",
     "AsyncProbeAttack",
     "AttackResult",
+    "CrescendoStep",
+    "MultiTurnFlow",
+    "MultiTurnResult",
+    "MultiTurnRunner",
     "get_attack_template",
+    "get_flow",
     "get_template_instruction",
     "list_attack_templates",
+    "list_flows",
 ]
