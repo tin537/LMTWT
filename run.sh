@@ -1,23 +1,25 @@
 #!/bin/bash
 
-# Script to run LMTWT with default settings
+# Script to run LMTWT.
+# Prefers uv (https://docs.astral.sh/uv/) when available; falls back to a
+# manually-managed venv otherwise.
 
-# Check if virtual environment exists, create if not
+if command -v uv >/dev/null 2>&1; then
+    exec uv run lmtwt "$@"
+fi
+
+# Fallback: classic venv workflow
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv venv
 fi
 
-# Activate virtual environment
 source venv/bin/activate
 
-# Install requirements if needed
 if [ ! -f "venv/.requirements_installed" ]; then
     echo "Installing requirements..."
-    pip install -r requirements.txt
     pip install -e .
     touch venv/.requirements_installed
 fi
 
-# Run the application
-python src/main.py "$@" 
+python -m lmtwt "$@"

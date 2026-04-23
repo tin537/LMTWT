@@ -1,9 +1,10 @@
 import os
 import sys
+
 import pytest
 
 # Add src directory to path so we can import lmtwt package
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from lmtwt.attacks.payloads import PayloadGenerator
 
@@ -42,7 +43,7 @@ def test_get_injection_payload(payload_generator):
 def test_get_payloads_by_category(payload_generator):
     """Test getting payloads by category."""
     categories = ["dan", "injection", "xss"]
-    
+
     for category in categories:
         payloads = payload_generator.get_payloads_by_category(category, count=2)
         assert len(payloads) == 2
@@ -61,4 +62,4 @@ def test_get_random_payload(payload_generator):
         assert "payload" in payload
         assert payload["category"] in payload_generator.get_all_categories()
         assert isinstance(payload["payload"], str)
-        assert len(payload["payload"]) > 0 
+        assert len(payload["payload"]) > 0

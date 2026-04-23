@@ -31,7 +31,6 @@ def setup_environment():
     if not os.path.exists(req_marker):
         print("Installing requirements...")
         try:
-            subprocess.check_call([venv_pip, "install", "-r", "requirements.txt"])
             subprocess.check_call([venv_pip, "install", "-e", "."])
             # Create marker file
             with open(req_marker, "w") as f:
@@ -39,12 +38,12 @@ def setup_environment():
         except subprocess.CalledProcessError as e:
             print(f"Error installing requirements: {e}")
             sys.exit(1)
-    
+
     return venv_python
 
 def run_lmtwt(venv_python, args):
     """Run the LMTWT application with provided arguments."""
-    cmd = [venv_python, "src/main.py"] + args
+    cmd = [venv_python, "-m", "lmtwt"] + args
     try:
         subprocess.check_call(cmd)
     except subprocess.CalledProcessError as e:
