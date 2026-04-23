@@ -12,16 +12,35 @@ import ssl
 from typing import Any
 
 
-def httpx_verify(ca_bundle: str | None, verify: bool) -> bool | str:
+def _load_ca_context(ca_bundle: str) -> ssl.SSLContext:
+    """Build an SSL context from a CA file. Supports both PEM (.pem/.crt) and DER (.der/.cer).
+
+    Python's ``cafile=`` arg only accepts PEM, so for DER we read the bytes and
+    pass them to ``load_verify_locations(cadata=...)`` which auto-detects format.
+    """
+    ctx = ssl.create_default_context()
+    lower = ca_bundle.lower()
+    if lower.endswith((".der", ".cer")):
+        with open(ca_bundle, "rb") as f:
+            ctx.load_verify_locations(cadata=f.read())
+    else:
+        ctx.load_verify_locations(cafile=ca_bundle)
+    return ctx
+
+
+def httpx_verify(ca_bundle: str | None, verify: bool) -> bool | str | ssl.SSLContext:
     """Translate (ca_bundle, verify) into the value httpx expects for ``verify=``.
 
     - ``verify=False`` → return ``False`` (insecure; skips cert validation)
-    - ``ca_bundle`` set → return the path (httpx loads it)
+    - ``ca_bundle`` is PEM → return the path (httpx loads it directly)
+    - ``ca_bundle`` is DER (.der/.cer) → return a pre-built ``SSLContext``
     - default → return ``True`` (uses certifi)
     """
     if not verify:
         return False
     if ca_bundle:
+        if ca_bundle.lower().endswith((".der", ".cer")):
+            return _load_ca_context(ca_bundle)
         return ca_bundle
     return True
 
@@ -49,5 +68,5 @@ def websocket_ssl_context(ca_bundle: str | None, verify: bool) -> ssl.SSLContext
         ctx.verify_mode = ssl.CERT_NONE
         return ctx
     if ca_bundle:
-        return ssl.create_default_context(cafile=ca_bundle)
+        return _load_ca_context(ca_bundle)
     return None

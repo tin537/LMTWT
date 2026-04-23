@@ -79,7 +79,7 @@ from any JSON file. The schema is keyed by `protocol`.
 
 | Key | Type | Required | Notes |
 |---|---|---|---|
-| `protocol` | string | no | `http` (default), `sse`, `websocket`, `ws`, `wss` |
+| `protocol` | string | no | `http` (default), `sse`, `websocket`, `ws`, `wss`, `socketio` |
 | `endpoint` | string | yes | Full URL (https://..., wss://...) |
 | `headers` | object | no | HTTP / handshake headers |
 | `payload_template` | object | no | Base body; `prompt` is added per request |
@@ -120,6 +120,33 @@ from any JSON file. The schema is keyed by `protocol`.
 | `done_signal` | Same matcher format as SSE; if `null`, terminate on socket close |
 | `keep_alive` | Reuse one socket across `chat()` calls (default `false`) |
 | `ping_interval` | Seconds between WS pings (default 20) |
+
+### Socket.IO-only
+
+For chatbots that speak the Socket.IO v5 / Engine.IO v4 sub-protocol over
+WebSocket — frames look like `42["send_message", {...}]`,
+`421[...]` (event with ack id), `431[...]` (ack response). The adapter
+handles the `0` open / `40` connect handshake and replies to server pings
+automatically; you only configure event names and payload shape.
+
+| Key | Notes |
+|---|---|
+| `eio_version` | Engine.IO protocol version: `"4"` (default, Socket.IO v5) or `"3"` (Socket.IO v2). v3 uses client-driven pings and skips the explicit `40` connect frame on the default namespace. |
+| `namespace` | Socket.IO namespace, default `/` |
+| `auth` | Optional auth dict sent in the `40{...}` connect frame |
+| `event_name` | Event to emit on every `chat()` (e.g. `"send_message"`) |
+| `response_event` | Inbound event name to wait for (e.g. `"receive_message"`). If unset, the adapter returns the ack body. |
+| `prompt_path` | Dotted path inside `payload_template` where the user prompt is injected (e.g. `"messageContent.0.content"`) |
+| `message_id_key` | Dotted path that gets a fresh UUID per request (e.g. `"messageId"`) |
+| `session_id_key` | Dotted path for the session id (e.g. `"sessionId"`) |
+| `session_id` | Explicit session id; otherwise generated once per model instance |
+| `response_path` | Dotted path inside the response event payload that contains the assistant text |
+| `request_ack` | Whether to emit with an ack id and wait for the `43...` reply (default `true`) |
+| `ack_timeout` | Seconds to wait for the ack (default `30`) |
+| `response_timeout` | Seconds to wait for `response_event` (default `60`) |
+| `connect_timeout` | Seconds to wait for the Socket.IO connect ack (default `30`) |
+| `keep_alive` | Reuse one connection across `chat()` calls (default `true`) |
+| `subprotocol` | Optional WebSocket subprotocol |
 
 ## Examples
 
@@ -169,6 +196,42 @@ from any JSON file. The schema is keyed by `protocol`.
   "keep_alive": true,
   "ping_interval": 20
 }
+```
+
+### Socket.IO chatbot
+
+```json
+{
+  "protocol": "socketio",
+  "endpoint": "wss://chat.example.com/socket.io/",
+  "headers": { "Origin": "https://chat.example.com" },
+  "event_name": "send_message",
+  "response_event": "receive_message",
+  "payload_template": {
+    "flow": "ptp",
+    "messageContent": [{ "content": "", "preset": false, "type": "TEXT" }],
+    "messageId": "",
+    "resend": false,
+    "role": "USER",
+    "sessionId": "",
+    "subFlow": "ptpayhome"
+  },
+  "prompt_path": "messageContent.0.content",
+  "message_id_key": "messageId",
+  "session_id_key": "sessionId",
+  "response_path": "messageContent.0.content",
+  "keep_alive": true
+}
+```
+
+The wire exchange this produces:
+
+```
+client → 40                                              (Socket.IO connect)
+server → 40{"sid":"..."}
+client → 421["send_message",{ ...payload with prompt... }]
+server → 431[{"messageId":"...","status":"SUCCESS",...},null]
+server → 42["receive_message",{...,"messageContent":[{"content":"...","type":"TEXT"}]}]
 ```
 
 ### Routed through Burp

@@ -9,7 +9,12 @@ from .async_anthropic import AsyncAnthropicModel
 from .async_base import AsyncAIModel
 from .async_gemini import AsyncGeminiModel
 from .async_openai import AsyncOpenAIModel
-from .external import HTTPExternalModel, SSEExternalModel, WebSocketExternalModel
+from .external import (
+    HTTPExternalModel,
+    SocketIOExternalModel,
+    SSEExternalModel,
+    WebSocketExternalModel,
+)
 
 _EXTERNAL_PROTOCOLS = {
     "http": HTTPExternalModel,
@@ -17,6 +22,8 @@ _EXTERNAL_PROTOCOLS = {
     "websocket": WebSocketExternalModel,
     "ws": WebSocketExternalModel,
     "wss": WebSocketExternalModel,
+    "socketio": SocketIOExternalModel,
+    "socket.io": SocketIOExternalModel,
 }
 
 __all__ = ["async_get_model"]

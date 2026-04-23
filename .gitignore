@@ -47,3 +47,5 @@ htmlcov/
 # OS specific
 .DS_Store
 Thumbs.db 
+cert.der
+examples/socketio_target.json

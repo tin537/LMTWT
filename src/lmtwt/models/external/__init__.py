@@ -2,6 +2,7 @@
 
 from .base import BaseExternalModel
 from .http import HTTPExternalModel
+from .socketio import SocketIOExternalModel
 from .sse import SSEExternalModel
 from .websocket import WebSocketExternalModel
 
@@ -9,5 +10,6 @@ __all__ = [
     "BaseExternalModel",
     "HTTPExternalModel",
     "SSEExternalModel",
+    "SocketIOExternalModel",
     "WebSocketExternalModel",
 ]
