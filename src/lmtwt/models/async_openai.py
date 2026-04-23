@@ -35,6 +35,7 @@ class AsyncOpenAIModel(AsyncAIModel):
         api_key: str | None = None,
         model_name: str = "gpt-4o",
         *,
+        base_url: str | None = None,
         max_rate: int = 60,
         time_period: float = 60.0,
         max_attempts: int = 3,
@@ -44,6 +45,7 @@ class AsyncOpenAIModel(AsyncAIModel):
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
+        self.base_url = base_url
         self.proxy = proxy
         self.ca_bundle = ca_bundle
         self.verify = verify
@@ -63,6 +65,8 @@ class AsyncOpenAIModel(AsyncAIModel):
         if not api_key:
             raise ValueError("OpenAI API key not provided and OPENAI_API_KEY not set")
         client_kwargs: dict = {"api_key": api_key}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
         if self.proxy or self.ca_bundle or not self.verify:
             client_kwargs["http_client"] = httpx.AsyncClient(
                 **httpx_client_kwargs(self.proxy, self.ca_bundle, self.verify)

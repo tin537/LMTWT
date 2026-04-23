@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .async_anthropic import AsyncAnthropicModel
@@ -57,6 +58,17 @@ def async_get_model(
         if model_name:
             kwargs["model_name"] = model_name
         return AsyncOpenAIModel(**kwargs)
+
+    if p == "lmstudio":
+        # LM Studio exposes an OpenAI-compatible REST API on localhost.
+        # Default port is 1234; override via LM_STUDIO_BASE_URL.
+        base_url = os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
+        return AsyncOpenAIModel(
+            api_key=api_key or "lm-studio",  # any non-empty string accepted
+            model_name=model_name or "local-model",
+            base_url=base_url,
+            **transport_kwargs,
+        )
 
     if p == "anthropic":
         kwargs = {"api_key": api_key, **transport_kwargs}

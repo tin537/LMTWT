@@ -53,9 +53,11 @@ def parse_args() -> argparse.Namespace:
         description="LMTWT — Let Me Talk With Them: AI prompt-injection testing tool"
     )
     p.add_argument("--attacker", "-a", type=str, default="gemini",
-                   choices=["gemini", "openai", "anthropic", "huggingface"])
+                   choices=["gemini", "openai", "anthropic", "huggingface",
+                            "lmstudio"])
     p.add_argument("--target", "-t", type=str, default="openai",
-                   choices=["gemini", "openai", "anthropic", "external-api", "huggingface"])
+                   choices=["gemini", "openai", "anthropic", "external-api",
+                            "huggingface", "lmstudio"])
     p.add_argument("--attacker-model", type=str)
     p.add_argument("--target-model", type=str)
     p.add_argument("--mode", "-m", type=str, default="interactive",
