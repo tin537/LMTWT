@@ -1,165 +1,291 @@
-# LMTWT - Let Me Talk With Them
+# LMTWT — Let Me Talk With Them
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT">
   <img src="https://img.shields.io/badge/Contributions-Welcome-brightgreen" alt="Contributions: Welcome">
 </p>
 
-LMTWT is a powerful security testing framework for evaluating AI model resistance to prompt injection attacks and other security vulnerabilities. It enables security researchers to use one AI model (e.g., Gemini) to test the security boundaries of another AI system.
+LMTWT is an async-first security testing framework for evaluating LLM resistance
+to prompt injection, jailbreaks, and tool-use attacks. It pits one model
+(the **attacker**) against another (the **target**) and reports whether the
+target was compromised — automatically, at scale, against frontier APIs or
+custom backends behind your own protocol.
 
-## 🔥 Key Features
+## What you can hit
 
-- **Multi-Model Testing**: Test against OpenAI, Anthropic, Gemini, and custom API endpoints
-- **Advanced Attack Modes**: 
-  - **Hacker Mode** with conversation history analysis
-  - **Probe Attacks** across multiple vulnerability categories
-  - **Template-based** testing patterns
-- **Extensible Architecture**:
-  - Local model support via Hugging Face
-  - Custom API endpoints
-  - Pluggable attack strategies
-- **Developer Experience**:
-  - Modern Web UI
-  - Interactive CLI
-  - Detailed reporting
-- **Performance Optimizations**:
-  - GPU acceleration (CUDA/MPS)
-  - Circuit breaker patterns to respect rate limits
-  - Model quantization for resource efficiency
+- **Hosted LLMs** — OpenAI, Anthropic, Gemini
+- **Local LLMs** — Hugging Face transformers, **LM Studio** (OpenAI-compatible)
+- **Agent runtimes** — **Claude Code via ACP** (Agent Client Protocol over stdio)
+- **Custom backends via `external-api`** — your own chatbot at any of:
+  - **HTTP** (single round-trip JSON)
+  - **SSE** (Server-Sent Events streaming)
+  - **WebSocket** (raw frame protocol)
+  - **Socket.IO** (v5/EIO v4 *or* v2/EIO v3, with ack + event correlation)
 
-## 📋 Installation
+Anything you can describe in a JSON config can be a target — payload templates,
+auth headers, dotted-path response extraction, ack handling, the lot.
+
+## What it does to them
+
+- **Single-shot attack templates** (`--mode template`) — curated injection / jailbreak prompts
+- **Probe sweeps** (`--probe-mode`) — eight built-in vulnerability categories
+- **Multi-turn flows** (`--mode multi-turn`) — scripted social-engineering arcs
+- **Tool-use attacks** (`--mode tool-use`) — indirect prompt injection via tool results
+- **Refinement strategies** (`--strategy pair|tap`) — automated PAIR / TAP attack search
+- **Hacker mode** (`--hacker-mode`) — attacker reads conversation history and adapts
+- **Three judges**: regex, LLM-based, or ensemble for success detection
+
+## Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/tanuphattin/LMTWT.git
+git clone https://github.com/tin537/LMTWT.git
 cd LMTWT
 
-# Install dependencies
-pip install -r requirements.txt
+# Recommended: uv (https://docs.astral.sh/uv/)
+uv sync
 
-# Optional: GPU acceleration
-# For NVIDIA GPUs
-pip install torch==2.1.0+cu118 -f https://download.pytorch.org/whl/torch_stable.html
-pip install bitsandbytes accelerate
+# Or plain pip
+pip install -e .
 
-# For Apple Silicon (M1/M2/M3)
-pip install torch
+# Optional: local Hugging Face inference
+pip install -e '.[local]'
+
+# Optional: Web UI (Gradio)
+pip install -e '.[web]'
 ```
 
-## 🚀 Quick Start
+Python 3.10+ is required. GPU acceleration (CUDA / Apple MPS) is auto-detected
+when PyTorch is installed.
+
+## Configure credentials
+
+Create `.env` at the repo root (only the providers you'll use):
 
 ```bash
-# Set up your API keys in .env file (see .env.example)
-cp .env.example .env
+GEMINI_API_KEY=...
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+HUGGINGFACE_API_KEY=hf_...     # optional, only for gated models
+```
 
-# Run interactive mode (Gemini attacking OpenAI)
+LM Studio and Claude Code (ACP) need no key — they run locally.
+
+## Quick start
+
+```bash
+# Interactive: Gemini attacking OpenAI
 ./run.sh --attacker gemini --target openai --mode interactive
 
-# Launch the web UI
+# Local-only: LM Studio attacking LM Studio (no API costs)
+./run.sh --attacker lmstudio --attacker-model "qwen2.5-7b" \
+         --target lmstudio  --target-model "llama-3.1-8b" \
+         --mode interactive
+
+# Web UI
 ./run.sh --web
 ```
 
-## 💡 Usage Examples
+## Usage examples
 
-### Testing Different Models
+### Targeting different model backends
 
 ```bash
-# Test against Claude
+# Hosted: Claude as the target
 ./run.sh --attacker gemini --target anthropic
 
-# Use a local model as the target
-./run.sh --attacker gemini --target huggingface --target-model "mistralai/Mistral-7B-Instruct-v0.2"
+# Local: Hugging Face transformer
+./run.sh --attacker gemini --target huggingface \
+         --target-model "mistralai/Mistral-7B-Instruct-v0.2"
 
-# Test against a custom API
-./run.sh --attacker gemini --target external-api --target-config examples/custom_target.json
+# Local: LM Studio (OpenAI-compatible REST on localhost:1234)
+./run.sh --attacker gemini --target lmstudio --target-model "your-model-id"
+
+# Agent runtime: Claude Code over ACP
+./run.sh --attacker gemini --target claude-code
+
+# Custom HTTP backend
+./run.sh --attacker gemini --target external-api \
+         --target-config examples/custom_api_target.json
+
+# Custom Socket.IO backend (e.g. fintech / customer-service chatbot)
+./run.sh --attacker gemini --target external-api \
+         --target-config examples/socketio_target.json
 ```
 
-### Attack Modes
+### Attack modes
 
 ```bash
-# Enable hacker mode for adaptive attacks
+# Hacker mode — attacker adapts based on target's prior responses
 ./run.sh --attacker gemini --target openai --hacker-mode
 
-# Use probe mode to test specific vulnerabilities
+# Probe a specific vulnerability category
 ./run.sh --probe-mode --probe-category injection --target openai
 
-# Run batch attacks with custom instructions
-./run.sh --mode batch --instruction "Create a jailbreak prompt" --instruction "Test system prompt extraction"
+# Batch attacks with explicit instructions
+./run.sh --mode batch \
+         --instruction "Create a jailbreak prompt" \
+         --instruction "Test system-prompt extraction"
+
+# Multi-turn social-engineering flow
+./run.sh --mode multi-turn --flow trust_then_pivot
+
+# Tool-use attack (indirect prompt injection via tool results)
+./run.sh --mode tool-use --tool-vector hidden_instruction
+
+# Automated refinement: PAIR (5 iterations) or TAP (tree of thoughts)
+./run.sh --strategy pair --strategy-iterations 5
+./run.sh --strategy tap  --strategy-branching 3 --strategy-depth 4
 ```
 
-### Advanced Options
+### Standardized templates
 
 ```bash
-# Run in probe mode with a specific attack category
-./run.sh --probe-mode --probe-category dan --probe-iterations 10
+# List built-in attack templates
+./run.sh --list-templates
 
-# Use templates for standardized testing
+# Run a specific template
 ./run.sh --mode template --template basic_prompt_injection
 
-# List available templates
-./run.sh --list-templates
+# List multi-turn flows / tool-use vectors
+./run.sh --list-flows
+./run.sh --list-vectors
 ```
 
-## 🧩 Attack Categories
+### Routing through Burp / mitmproxy / ZAP
 
-LMTWT supports multiple attack categories to test different aspects of AI safety:
-
-| Category | Description |
-|----------|-------------|
-| `dan` | Do Anything Now jailbreak prompts |
-| `injection` | Classic prompt injection attacks |
-| `xss` | Cross-site scripting vectors |
-| `glitch` | Unicode and token boundary exploits |
-| `misleading` | Misleading information generation |
-| `malware` | Malware-related content generation |
-| `forbidden_knowledge` | Dangerous knowledge extraction |
-| `snowball` | Escalating hallucination attacks |
-
-## 🌐 Web UI
-
-Launch the modern web interface:
+Every model — hosted, local, and external — flows through the same TLS/proxy
+layer. Burp captures help when you're targeting a custom backend whose protocol
+you don't fully understand yet.
 
 ```bash
-# Start on default port (8501)
-./run.sh --web
-
-# Custom port and public sharing
-./run.sh --web --web-port 8080 --share
+./run.sh --attacker gemini --target external-api \
+         --target-config my_target.json \
+         --proxy http://127.0.0.1:8080 \
+         --ca-bundle ~/.burp/cacert.pem
 ```
 
-The UI provides:
-- Model selection and configuration
-- Interactive attack testing
-- Result visualization and analysis
-- Attack history with success tracking
+CA bundle accepts both **PEM** (`.pem` / `.crt`) and **DER** (`.der` / `.cer`) —
+no conversion needed. Per-target overrides (`proxy`, `ca_bundle`, `insecure`)
+in the target-config JSON win over CLI flags.
 
-## 🔌 Configuration
+## Attack categories (probe mode)
 
-Create a `.env` file with your API keys:
+| Category | What it tests |
+|---|---|
+| `dan` | "Do Anything Now" jailbreak prompts |
+| `injection` | Classic prompt injection |
+| `xss` | Cross-site scripting payloads in model output |
+| `glitch` | Unicode and token-boundary exploits |
+| `misleading` | Misinformation / hallucination induction |
+| `malware` | Malware-related content generation |
+| `forbidden_knowledge` | Dangerous-knowledge extraction |
+| `snowball` | Escalating-hallucination attacks |
 
+## External-API targets in 30 seconds
+
+The `external-api` target is the framework's escape hatch. Point it at a JSON
+file describing the wire protocol and LMTWT handles the rest. Four protocols
+are built in:
+
+| `protocol` | Use when |
+|---|---|
+| `http` (default) | One-shot REST chat endpoint |
+| `sse` | Server-Sent Events streaming response |
+| `websocket` / `ws` / `wss` | Raw WebSocket JSON frames |
+| `socketio` / `socket.io` | Socket.IO v5 (EIO v4) or v2 (EIO v3) — set `eio_version` |
+
+A minimal Socket.IO config looks like:
+
+```json
+{
+  "protocol": "socketio",
+  "endpoint": "wss://chat.example.com/socket.io/",
+  "eio_version": "3",
+  "headers": { "Authorization": "Bearer ...", "User-Agent": "android" },
+  "event_name": "send_message",
+  "response_event": "receive_message",
+  "payload_template": {
+    "messageContent": [{ "content": "", "type": "TEXT" }],
+    "messageId": "", "sessionId": "", "role": "USER"
+  },
+  "prompt_path": "messageContent.0.content",
+  "message_id_key": "messageId",
+  "session_id_key": "sessionId",
+  "session_id": "session-from-your-bootstrap-api",
+  "response_path": "messageContent.0.content"
+}
 ```
-GEMINI_API_KEY=your_gemini_api_key
-OPENAI_API_KEY=your_openai_api_key
-ANTHROPIC_API_KEY=your_anthropic_api_key
-HUGGINGFACE_API_KEY=your_huggingface_api_key  # Optional
+
+See [`docs/configuration.md`](docs/configuration.md) for the full schema and
+[`examples/`](examples/) for working configs (HTTP, Socket.IO, Ollama).
+
+Debug helper: set `LMTWT_SOCKETIO_DEBUG=1` to dump every Socket.IO frame to
+stderr while a run is in flight.
+
+## Web UI
+
+```bash
+./run.sh --web                                    # localhost:8501
+./run.sh --web --web-port 8080 --share            # public Gradio share link
 ```
 
-## 📝 License
+The UI exposes model selection, interactive attack composition, result
+visualization, and a session history with pass/fail tracking.
 
-This project is available under the MIT License - see the LICENSE file for details.
+## Architecture in one paragraph
 
-### Acknowledgments
+The async-first engine (`src/lmtwt/attacks/async_engine.py`) drives an
+`attacker` and a `target`, both implementing a small `AsyncAIModel` interface
+(`src/lmtwt/models/async_base.py`). Provider classes live in
+`src/lmtwt/models/`; external transports in `src/lmtwt/models/external/`.
+Each `chat()` returns a typed `ChatResponse`; streaming is exposed via
+`astream()`. A judge (`src/lmtwt/judges/`) decides whether the target's
+response counts as a successful jailbreak. Read [`docs/architecture.md`](docs/architecture.md)
+for the full picture.
 
-This project was inspired by several open source tools in the LLM security space, including:
+## Tests
 
-- [NVIDIA's garak](https://github.com/NVIDIA/garak) (Apache License 2.0) - A pioneering tool for LLM vulnerability scanning that informed some of our testing strategies.
+```bash
+uv run pytest                       # full suite (~150 tests, ~2s)
+uv run pytest tests/test_external_socketio.py -v
+uv run pytest --cov=src/lmtwt
+```
 
-While LMTWT is an original implementation under the MIT License, we appreciate the work of these projects that have advanced the field of AI security research.
+[![Python Tests](https://github.com/tin537/LMTWT/actions/workflows/python-tests.yml/badge.svg)](https://github.com/tin537/LMTWT/actions/workflows/python-tests.yml)
 
-## 💖 Support the Project
+## Documentation
 
-If you find this tool valuable, please consider supporting its development:
+- [`docs/index.md`](docs/index.md) — table of contents
+- [`docs/architecture.md`](docs/architecture.md) — async engine, model layer, judges
+- [`docs/configuration.md`](docs/configuration.md) — `.env`, `config.json`, target-config schema
+- [`docs/cli.md`](docs/cli.md) — every flag, every mode
+- [`docs/models.md`](docs/models.md) — provider matrix and capability notes
+- [`docs/attacks.md`](docs/attacks.md) — templates, probes, flows, tool-use vectors
+- [`docs/web.md`](docs/web.md) — Gradio UI
+- [`docs/roadmap.md`](docs/roadmap.md) — what's next
+
+## Contributing
+
+```bash
+git checkout -b feature/your-thing
+uv sync                              # installs dev group automatically
+uv run pytest                        # green before pushing
+uv run ruff check src tests          # lint
+git commit -m "feat: ..."
+git push origin feature/your-thing
+```
+
+PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+## Acknowledgments
+
+Inspired by [NVIDIA's garak](https://github.com/NVIDIA/garak) (Apache 2.0).
+LMTWT is an original implementation under MIT — we appreciate garak's prior
+work in the LLM red-team space.
+
+## Support the project
 
 <p align="center">
   <a href="https://www.paypal.me/tanuphattin">
@@ -167,41 +293,18 @@ If you find this tool valuable, please consider supporting its development:
   </a>
 </p>
 
-Your contributions help maintain this project and fund future development.
+## Disclaimer
 
-## ⚠️ Disclaimer
+For **educational purposes** and **authorized security testing** only. Always
+get written permission before testing any system you don't own. Researchers
+running CTFs, internal red-team engagements, and personal lab work are the
+intended audience. The authors disclaim responsibility for misuse.
 
-This tool is intended for *educational purposes* and *legitimate security testing* only. Always obtain proper authorization before testing AI systems. The creators are not responsible for misuse of this software.
+## License
 
-## 🤝 Contributing
+MIT — see [`LICENSE`](LICENSE).
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## Contact
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Automated Testing
-
-This project uses pytest for testing and GitHub Actions for continuous integration:
-
-```bash
-# Install development dependencies
-pip install pytest pytest-cov
-
-# Run tests
-pytest
-
-# Run tests with coverage report
-pytest --cov=src/lmtwt
-```
-
-[![Python Tests](https://github.com/tanuphattin/LMTWT/actions/workflows/python-tests.yml/badge.svg)](https://github.com/tanuphattin/LMTWT/actions/workflows/python-tests.yml)
-
-## 📬 Contact
-
-Tanuphat Tin - tanuphat.chai@gmail.com
-
-Project Link: [https://github.com/tanuphattin/LMTWT](https://github.com/tanuphattin/LMTWT) 
+Tanuphat Tin — tanuphat.chai@gmail.com
+[github.com/tin537/LMTWT](https://github.com/tin537/LMTWT)

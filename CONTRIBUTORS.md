@@ -1,7 +1,7 @@
 # Contributors
 
 ## Project Lead
-- **Tanuphat Tin** - _Initial work and maintenance_ - [GitHub](https://github.com/tanuphattin)
+- **Tin537** - _Initial work and maintenance_ - [GitHub](https://github.com/tin537)
 
 ## Core Contributors
 <!-- Add core contributors here as they join the project -->
@@ -35,4 +35,4 @@ This project builds upon research and tools from the AI security community. We'r
 
 ---
 
-*To add yourself to this file, please submit a pull request with your information added to the appropriate section.* 
+*To add yourself to this file, please submit a pull request with your information added to the appropriate section.*

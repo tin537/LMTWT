@@ -66,8 +66,8 @@ default-groups = ["dev"]
 lmtwt = "lmtwt.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/tanuphattin/LMTWT"
-Issues = "https://github.com/tanuphattin/LMTWT/issues"
+Homepage = "https://github.com/tin537/LMTWT"
+Issues = "https://github.com/tin537/LMTWT/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lmtwt"]
