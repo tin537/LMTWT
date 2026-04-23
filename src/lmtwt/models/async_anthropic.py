@@ -41,9 +41,11 @@ class AsyncAnthropicModel(AsyncAIModel):
         max_rate: int = 50,
         time_period: float = 60.0,
         max_attempts: int = 3,
+        cache_system: bool = True,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
+        self.cache_system = cache_system
         self._client: anthropic.AsyncAnthropic | None = None
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._retry = AsyncRetrying(
@@ -74,7 +76,19 @@ class AsyncAnthropicModel(AsyncAIModel):
             "max_tokens": max_tokens,
         }
         if conversation.system:
-            kwargs["system"] = conversation.system
+            if self.cache_system:
+                # Anthropic prompt caching: mark the system block as ephemeral
+                # so repeated calls with the same system prompt hit the cache.
+                # Surfaces in usage.cache_read_input_tokens.
+                kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": conversation.system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                kwargs["system"] = conversation.system
         return kwargs
 
     @staticmethod

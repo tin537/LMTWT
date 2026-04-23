@@ -6,14 +6,20 @@ from lmtwt.models.async_anthropic import AsyncAnthropicModel
 from lmtwt.models.conversation import Conversation
 
 
-def _make_response(text="hello there", stop_reason="end_turn", in_tokens=10, out_tokens=2):
+def _make_response(
+    text="hello there",
+    stop_reason="end_turn",
+    in_tokens=10,
+    out_tokens=2,
+    cached=0,
+):
     resp = MagicMock()
     resp.content = [MagicMock(text=text)]
     resp.stop_reason = stop_reason
     resp.usage = MagicMock(
         input_tokens=in_tokens,
         output_tokens=out_tokens,
-        cache_read_input_tokens=0,
+        cache_read_input_tokens=cached,
     )
     return resp
 
@@ -37,7 +43,14 @@ async def test_chat_returns_typed_response():
     assert response.usage.output_tokens == 2
 
     call_kwargs = fake_client.messages.create.call_args.kwargs
-    assert call_kwargs["system"] == "be terse"
+    # Default-on prompt caching wraps system in a typed block with cache_control.
+    assert call_kwargs["system"] == [
+        {
+            "type": "text",
+            "text": "be terse",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     assert call_kwargs["messages"] == [{"role": "user", "content": "hi"}]
     assert call_kwargs["max_tokens"] == 4096
 
@@ -109,6 +122,39 @@ async def test_astream_yields_text_then_final_chunk():
     assert "".join(text_chunks) == "hello there"
     assert chunks[-1].finish_reason == "end_turn"
     assert chunks[-1].usage.input_tokens == 10
+
+
+async def test_chat_sends_plain_string_when_cache_disabled():
+    model = AsyncAnthropicModel(api_key="fake", cache_system=False)
+    fake_client = MagicMock()
+    fake_client.messages.create = AsyncMock(return_value=_make_response())
+
+    with patch(
+        "lmtwt.models.async_anthropic.anthropic.AsyncAnthropic",
+        return_value=fake_client,
+    ):
+        await model.chat(Conversation().with_system("be terse").append("user", "hi"))
+
+    call_kwargs = fake_client.messages.create.call_args.kwargs
+    assert call_kwargs["system"] == "be terse"  # plain string, no cache_control
+
+
+async def test_chat_surfaces_cache_hit_in_usage():
+    model = AsyncAnthropicModel(api_key="fake")
+    fake_client = MagicMock()
+    fake_client.messages.create = AsyncMock(
+        return_value=_make_response(in_tokens=2, cached=1234)
+    )
+
+    with patch(
+        "lmtwt.models.async_anthropic.anthropic.AsyncAnthropic",
+        return_value=fake_client,
+    ):
+        response = await model.chat(
+            Conversation().with_system("repeated system").append("user", "hi")
+        )
+
+    assert response.usage.cached_input_tokens == 1234
 
 
 async def test_aclose_releases_client():
