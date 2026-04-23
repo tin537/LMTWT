@@ -21,9 +21,10 @@ from .attacks.flows import (
     list_flows,
     turn_log_to_attack_result,
 )
+from .attacks.strategies import PAIRStrategy, TAPStrategy
 from .attacks.templates import get_template_instruction, list_attack_templates
 from .models.async_factory import async_get_model
-from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge
+from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
 from .utils.config import load_config, load_target_config
 from .utils.logger import console, setup_logger
 from .utils.report_generator import ReportGenerator
@@ -85,6 +86,20 @@ def parse_args() -> argparse.Namespace:
                    choices=["gemini", "openai", "anthropic"],
                    help="Provider used for the LLM judge")
     p.add_argument("--max-retries", type=int, default=3)
+    # Refinement strategies (PAIR / TAP)
+    p.add_argument("--strategy", type=str, default=None,
+                   choices=["pair", "tap"],
+                   help="Run an automated refinement strategy instead of single-shot attacks")
+    p.add_argument("--strategy-iterations", type=int, default=5,
+                   help="PAIR: max iterations (default 5)")
+    p.add_argument("--strategy-branching", type=int, default=3,
+                   help="TAP: branching factor (variants per parent, default 3)")
+    p.add_argument("--strategy-depth", type=int, default=4,
+                   help="TAP: tree depth (default 4)")
+    p.add_argument("--strategy-prune", type=int, default=2,
+                   help="TAP: top-K survivors to keep at each level (default 2)")
+    p.add_argument("--strategy-threshold", type=int, default=8,
+                   help="Score threshold (1-10) that counts as a successful jailbreak (default 8)")
     # Proxy / TLS — for routing through Burp, mitmproxy, ZAP, corporate egress
     p.add_argument("--proxy", type=str,
                    help="HTTP/SOCKS proxy URL applied to attacker, target, judge")
@@ -203,6 +218,73 @@ async def _run_batch(engine: AsyncAttackEngine, args, instructions: list[str]) -
         "iterations": args.iterations,
         "compliance_agent": args.compliance_agent,
         "concurrency": args.concurrency,
+    }
+    ReportGenerator().generate_report(
+        [_result_to_legacy_dict(r) for r in results], metadata
+    )
+
+
+async def _run_strategy(args, attacker, target) -> None:
+    """Run PAIR or TAP refinement against each --instruction."""
+    # The scoring judge always uses the LLM judge model (--compliance-provider).
+    judge_api_key = os.getenv(f"{args.compliance_provider.upper()}_API_KEY")
+    judge_model = async_get_model(
+        args.compliance_provider,
+        api_key=judge_api_key,
+        **_transport_kwargs(args),
+    )
+    scoring_judge = ScoringLLMJudge(judge_model, threshold=args.strategy_threshold)
+
+    if args.strategy == "pair":
+        strategy = PAIRStrategy(
+            judge=scoring_judge,
+            max_iterations=args.strategy_iterations,
+            score_threshold=args.strategy_threshold,
+        )
+    else:
+        strategy = TAPStrategy(
+            judge=scoring_judge,
+            branching_factor=args.strategy_branching,
+            depth=args.strategy_depth,
+            prune_top_k=args.strategy_prune,
+            score_threshold=args.strategy_threshold,
+        )
+
+    console.print(
+        f"\n[bold magenta]Strategy:[/bold magenta] {args.strategy.upper()} "
+        f"(threshold {args.strategy_threshold}/10)"
+    )
+
+    results: list[AttackResult] = []
+    for instruction in args.instruction:
+        console.print(f"\n[bold cyan]Objective:[/bold cyan] {instruction}")
+        result = await strategy.refine(
+            attacker, target, instruction, target_system_prompt=args.system_prompt
+        )
+        results.append(result)
+        marker = (
+            "[green]SUCCESS[/green]"
+            if result.success
+            else "[yellow]FAILED[/yellow]"
+        )
+        console.print(f"{marker} — {result.reason}")
+
+    successes = sum(1 for r in results if r.success)
+    console.print(
+        f"\n[bold]{args.strategy.upper()} complete: "
+        f"{successes}/{len(results)} jailbreaks succeeded[/bold]"
+    )
+
+    metadata = {
+        "attacker_model": getattr(attacker, "model_name", "unknown"),
+        "target_model": getattr(target, "model_name", "unknown"),
+        "judge_model": getattr(judge_model, "model_name", "unknown"),
+        "mode": "strategy",
+        "strategy": args.strategy,
+        "score_threshold": args.strategy_threshold,
+        "instructions": args.instruction,
+        "total_attacks": len(results),
+        "successes": successes,
     }
     ReportGenerator().generate_report(
         [_result_to_legacy_dict(r) for r in results], metadata
@@ -391,6 +473,11 @@ async def async_main() -> None:
             logger.error("No valid templates resolved")
             sys.exit(1)
         await _run_batch(engine, args, instructions)
+    elif args.strategy:
+        if not args.instruction:
+            logger.error("--strategy requires at least one --instruction (the goal)")
+            sys.exit(1)
+        await _run_strategy(args, attacker_model, target_model)
     elif args.mode == "multi-turn":
         if not args.flow:
             logger.error("Multi-turn mode requires --flow (use --list-flows)")

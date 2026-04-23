@@ -11,6 +11,7 @@ from .flows import (
     get_flow,
     list_flows,
 )
+from .strategies import PAIRStrategy, RefinementStrategy, TAPStrategy
 from .templates import (
     ATTACK_TEMPLATES,
     get_attack_template,
@@ -28,6 +29,9 @@ __all__ = [
     "MultiTurnFlow",
     "MultiTurnResult",
     "MultiTurnRunner",
+    "PAIRStrategy",
+    "RefinementStrategy",
+    "TAPStrategy",
     "get_attack_template",
     "get_flow",
     "get_template_instruction",
