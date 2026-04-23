@@ -23,6 +23,13 @@ from .attacks.flows import (
 )
 from .attacks.strategies import PAIRStrategy, TAPStrategy
 from .attacks.templates import get_template_instruction, list_attack_templates
+from .attacks.tools import (
+    BUILT_IN_VECTORS,
+    ToolHarness,
+    ToolUseAttack,
+    get_vector,
+    list_vectors,
+)
 from .models.async_factory import async_get_model
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
 from .utils.config import load_config, load_target_config
@@ -61,13 +68,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attacker-model", type=str)
     p.add_argument("--target-model", type=str)
     p.add_argument("--mode", "-m", type=str, default="interactive",
-                   choices=["interactive", "batch", "template", "multi-turn"])
+                   choices=["interactive", "batch", "template", "multi-turn",
+                            "tool-use"])
     p.add_argument("--instruction", "-i", type=str, action="append")
     p.add_argument("--template", type=str, action="append")
     p.add_argument("--list-templates", action="store_true")
     p.add_argument("--flow", type=str,
                    help=f"Multi-turn flow id (one of: {', '.join(BUILT_IN_FLOWS.keys())})")
     p.add_argument("--list-flows", action="store_true")
+    # Tool-use attacks
+    p.add_argument("--tool-vector", type=str, default=None,
+                   choices=list(BUILT_IN_VECTORS.keys()),
+                   help="Static injection vector for --mode tool-use (omit for dynamic rotation)")
+    p.add_argument("--list-vectors", action="store_true",
+                   help="Show built-in tool-use injection vectors and exit")
     p.add_argument("--iterations", type=int, default=1)
     p.add_argument("--delay", type=float, default=1.0)
     p.add_argument("--concurrency", type=int, default=1,
@@ -135,6 +149,14 @@ def list_flows_and_exit() -> None:
     print("---------------------------")
     for f in list_flows():
         print(f"{f['name']} ({f['steps']} steps): {f['description']}")
+    print()
+
+
+def list_vectors_and_exit() -> None:
+    print("\nAvailable Tool-use Injection Vectors:")
+    print("-------------------------------------")
+    for v in list_vectors():
+        print(f"{v['name']}: {v['description']}")
     print()
 
 
@@ -220,6 +242,54 @@ async def _run_batch(engine: AsyncAttackEngine, args, instructions: list[str]) -
         "iterations": args.iterations,
         "compliance_agent": args.compliance_agent,
         "concurrency": args.concurrency,
+    }
+    ReportGenerator().generate_report(
+        [_result_to_legacy_dict(r) for r in results], metadata
+    )
+
+
+async def _run_tool_use(args, attacker, target, judge) -> None:
+    if args.tool_vector:
+        vector = get_vector(args.tool_vector)
+        harness = ToolHarness.static(vector)
+        mode_label = f"static[{vector.name}]"
+    else:
+        harness = ToolHarness.dynamic()
+        mode_label = "dynamic"
+
+    attack = ToolUseAttack(
+        attacker=attacker,
+        target=target,
+        harness=harness,
+        judge=judge,
+        target_system_prompt=args.system_prompt,
+    )
+    console.print(
+        f"\n[bold magenta]Tool-use attack:[/bold magenta] {mode_label} "
+        f"(indirect prompt injection via fake tool outputs)"
+    )
+
+    results = await attack.batch(args.instruction, concurrency=args.concurrency)
+    successes = sum(1 for r in results if r.success)
+
+    for r in results:
+        marker = (
+            "[green]SUCCESS[/green]" if r.success else "[yellow]FAILED[/yellow]"
+        )
+        console.print(f"{marker} — {r.reason}")
+    console.print(
+        f"\n[bold]Tool-use complete: {successes}/{len(results)} agent compromises[/bold]"
+    )
+
+    metadata = {
+        "attacker_model": getattr(attacker, "model_name", "unknown"),
+        "target_model": getattr(target, "model_name", "unknown"),
+        "mode": "tool-use",
+        "tool_vector": args.tool_vector or "dynamic",
+        "instructions": args.instruction,
+        "judge": type(judge).__name__,
+        "total_attacks": len(results),
+        "successes": successes,
     }
     ReportGenerator().generate_report(
         [_result_to_legacy_dict(r) for r in results], metadata
@@ -387,6 +457,9 @@ async def async_main() -> None:
     if args.list_flows:
         list_flows_and_exit()
         return
+    if args.list_vectors:
+        list_vectors_and_exit()
+        return
 
     config = load_config(args.config)
 
@@ -492,6 +565,11 @@ async def async_main() -> None:
             logger.error("Multi-turn mode requires at least one --instruction (the goal)")
             sys.exit(1)
         await _run_multi_turn(args, attacker_model, target_model, judge, flow)
+    elif args.mode == "tool-use":
+        if not args.instruction:
+            logger.error("Tool-use mode requires at least one --instruction (the goal)")
+            sys.exit(1)
+        await _run_tool_use(args, attacker_model, target_model, judge)
 
 
 def main() -> None:
