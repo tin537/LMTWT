@@ -112,14 +112,16 @@ engagement, not a dependency on third-party academic benchmarks.
 | **Catalog runner + CLI** | ✅ — `AsyncCatalogProbe` with per-probe regex judge (refusal wins over success); `--probe-catalog`, `--probe-coordinate`, `--probe-severity`, `--list-probes` |
 | **First-party probe corpus (200+)** | 🚧 — **8 seed probes shipped** covering all 4 vectors and all 4 obfuscation values; corpus needs to grow to 200+. Target chatbots: Socket.IO, fintech IVR, customer-service — not research models. |
 
-### 5.2 Own scoring rubric ⬜
+### 5.2 Own scoring rubric 🚧
 
-| Item | What |
+| Item | Status |
 |---|---|
-| **LMTWT Severity Score (LSS)** | Vector format `LSS:1.0/V:I/D:M/E:H/S:L` — Vector, Delivery, Effect, Sophistication. Documented in `docs/lss.md`. CVSS analogue purpose-built for LLM findings. |
-| **Compound severity** | Engine multiplies findings that compose into a kill chain (system-prompt leak + tool access > either alone). |
-| **Refusal-quality grading** | A–F scale: soft / hard / leaky / partial / template. "Refused but disclosed filter rules" is itself a finding. |
-| **Confidence intervals** | Run probes N times, report verdict variance. Clients ask "is this a fluke?" — now there's an answer. |
+| **LMTWT Severity Score (LSS)** | ✅ — `src/lmtwt/scoring/lss.py`; vector string `LSS:1.0/V:L/D:D/O:P/E:S/S:M/C:N`, deterministic 0–10 score from base impact × vector × delivery × obfuscation × chain multipliers. Spec in [`docs/lss.md`](lss.md). |
+| **Compound severity** | ✅ — `compound_lss([...])` boosts max-of-chain by 1.30 (clamped to 10), flips vector to `C:Y`. |
+| **Refusal-quality grading** | ✅ — `grade_refusal()` returns A/B/C/D/F. Catalog runner attaches grade to every outcome (even failures), CLI surfaces histogram. |
+| **CLI integration** | ✅ — `--probe-catalog` output now shows `LSS=X.XX  refusal=A` per probe + `Max LSS` + by-grade histogram. |
+| **Confidence intervals** | ⬜ — run probes N times, report verdict variance. Next sub-landing in 5.2. |
+| **LLM-backed refusal grader** | ⬜ — current grader is regex-only; an LLM second-opinion grader is future work. |
 
 ### 5.3 Discovery engine ⬜
 

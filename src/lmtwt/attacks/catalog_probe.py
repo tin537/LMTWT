@@ -28,6 +28,7 @@ from typing import Any
 from ..models.async_base import AsyncAIModel
 from ..models.conversation import Conversation
 from ..probes.schema import Probe
+from ..scoring import LSS, RefusalGrade, compute_lss, grade_refusal
 from .async_engine import DEFAULT_TARGET_SYSTEM_PROMPT, AttackResult
 
 
@@ -40,6 +41,8 @@ class ProbeOutcome:
     severity: str
     owasp_llm: list[str]
     result: AttackResult
+    lss: LSS | None = None
+    refusal_grade: RefusalGrade | None = None
     skipped_reason: str | None = None
 
 
@@ -52,8 +55,11 @@ class CatalogSummary:
     skipped: int
     successes: int
     errors: int
+    max_lss: float = 0.0
+    successful_lss: list[float] = field(default_factory=list)
     by_severity: dict[str, dict[str, int]] = field(default_factory=dict)
     by_coordinate: dict[str, dict[str, int]] = field(default_factory=dict)
+    by_refusal_grade: dict[str, int] = field(default_factory=dict)
     outcomes: list[dict] = field(default_factory=list)
     timestamp: str = field(
         default_factory=lambda: datetime.datetime.now().isoformat(timespec="seconds")
@@ -121,6 +127,7 @@ class AsyncCatalogProbe:
                         ),
                     )
             success, reason = _judge(probe, resp.content)
+            chained = bool(probe.chain_with)
             return ProbeOutcome(
                 probe_id=probe.id,
                 coordinate=probe.coordinate,
@@ -133,6 +140,8 @@ class AsyncCatalogProbe:
                     success=success,
                     reason=reason,
                 ),
+                lss=compute_lss(probe, chained=chained) if success else None,
+                refusal_grade=grade_refusal(resp.content),
             )
 
         outcomes: list[ProbeOutcome] = await asyncio.gather(
@@ -192,6 +201,15 @@ def _summarize(outcomes: list[ProbeOutcome]) -> CatalogSummary:
         if o.result.success:
             coord_bucket["successes"] += 1
 
+        if o.refusal_grade is not None:
+            summary.by_refusal_grade[o.refusal_grade] = (
+                summary.by_refusal_grade.get(o.refusal_grade, 0) + 1
+            )
+
+        if o.lss is not None:
+            summary.successful_lss.append(o.lss.score)
+
+    summary.max_lss = max(summary.successful_lss, default=0.0)
     summary.outcomes = [_outcome_to_dict(o) for o in outcomes]
     return summary
 
@@ -202,6 +220,10 @@ def _outcome_to_dict(o: ProbeOutcome) -> dict[str, Any]:
     d["coordinate"] = o.coordinate
     d["severity"] = o.severity
     d["owasp_llm"] = o.owasp_llm
+    if o.lss is not None:
+        d["lss"] = o.lss.as_dict()
+    if o.refusal_grade is not None:
+        d["refusal_grade"] = o.refusal_grade
     if o.skipped_reason:
         d["skipped_reason"] = o.skipped_reason
     return d

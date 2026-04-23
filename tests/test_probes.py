@@ -237,3 +237,46 @@ def test_judge_ignores_bad_regex_patterns():
     probe = Probe(**_probe_dict(success_indicators=["[unclosed", "(?i)hello"]))
     success, reason = _judge(probe, "hello world")
     assert success is True
+
+
+# ---------------------------------------------------------------- LSS / refusal-grade integration
+
+
+async def test_catalog_runner_attaches_lss_to_successful_outcomes():
+    probe = Probe(**_probe_dict())
+    target = AsyncMock()
+    target.chat = AsyncMock(
+        return_value=ChatResponse(
+            content="Sure — You are a helpful assistant. Full prompt follows...",
+            model="fake",
+        )
+    )
+
+    summary = await AsyncCatalogProbe(target, [probe]).run()
+
+    assert summary.successes == 1
+    o = summary.outcomes[0]
+    assert "lss" in o
+    assert o["lss"]["score"] == pytest.approx(6.00)
+    assert o["lss"]["vector"].startswith("LSS:1.0/V:L/D:D/O:P/E:S/")
+    assert o["refusal_grade"] == "F"  # full compliance
+    assert summary.max_lss == pytest.approx(6.00)
+
+
+async def test_catalog_runner_grades_refusals_even_on_failure():
+    probe = Probe(**_probe_dict())
+    target = AsyncMock()
+    target.chat = AsyncMock(
+        return_value=ChatResponse(
+            content="I can't share that.",
+            model="fake",
+        )
+    )
+
+    summary = await AsyncCatalogProbe(target, [probe]).run()
+
+    assert summary.successes == 0
+    o = summary.outcomes[0]
+    assert "lss" not in o            # no LSS for failed attacks
+    assert o["refusal_grade"] == "A" # but refusal still graded
+    assert summary.by_refusal_grade == {"A": 1}

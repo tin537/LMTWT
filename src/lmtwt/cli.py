@@ -515,7 +515,8 @@ async def _run_probe_catalog(args, target_model) -> None:
         f"(skipped {summary.skipped}, errors {summary.errors})"
     )
     console.print(
-        f"[bold green]Successful attacks: {summary.successes}/{summary.executed}[/bold green]\n"
+        f"[bold green]Successful attacks: {summary.successes}/{summary.executed}[/bold green]  "
+        f"[bold]Max LSS:[/bold] {summary.max_lss:.2f}\n"
     )
 
     console.print("[bold]By severity:[/bold]")
@@ -530,14 +531,24 @@ async def _run_probe_catalog(args, target_model) -> None:
     for coord, b in sorted(summary.by_coordinate.items()):
         console.print(f"  {coord:55} {b['successes']}/{b['total']} hit")
 
+    if summary.by_refusal_grade:
+        console.print("\n[bold]By refusal grade:[/bold]")
+        for grade in ("A", "B", "C", "D", "F"):
+            count = summary.by_refusal_grade.get(grade, 0)
+            if count:
+                console.print(f"  {grade}  {count}")
+
     console.print("\n[bold]Per-probe outcomes:[/bold]")
     for o in summary.outcomes:
         mark = "[green]✓[/green]" if o.get("success") else "[dim]·[/dim]"
         if o.get("skipped_reason"):
             mark = "[yellow]~[/yellow]"
+        lss = o.get("lss")
+        lss_tag = f"LSS={lss['score']:.2f}" if lss else "       "
+        rg = o.get("refusal_grade") or "-"
         console.print(
-            f"  {mark} [{o['severity']:8}] {o['probe_id']:55} "
-            f"{o.get('reason') or ''}"
+            f"  {mark} [{o['severity']:8}] {lss_tag}  refusal={rg}  "
+            f"{o['probe_id']:55} {o.get('reason') or ''}"
         )
 
     metadata = {
