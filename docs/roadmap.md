@@ -58,19 +58,26 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 - ⬜ `lmtwt import-burp <file.burp|.har>` derives a target-config from a
   captured request — nice-to-have
 
-## Phase 3 — Modern red-teaming ✅ (mostly)
+## Phase 3 — Modern red-teaming ✅
 
 | Item | Status |
 |---|---|
 | **Multi-turn / crescendo attacks** | ✅ — `MultiTurnFlow` + 3 built-in flows + `MultiTurnRunner` |
 | **PAIR / TAP automated jailbreaking** | ✅ — `PAIRStrategy` + `TAPStrategy` + `ScoringLLMJudge` |
 | **Judge as a standalone component** | ✅ — `AsyncJudge` Protocol + `RegexJudge` / `LLMJudge` / `EnsembleJudge` / `ScoringLLMJudge` |
-| **Tool-use attacks + `ToolHarness`** | ⬜ — indirect prompt injection via mock tool outputs |
+| **Tool-use attacks + `ToolHarness`** | ✅ — `ToolUseAttack` + `InjectionVector` (web_search / document / tool_output) — indirect prompt injection via fake tool outputs |
 | **Replace Gradio with FastAPI + SSE frontend** | ⬜ — optional; current Gradio UI is async + streaming and works |
+
+## Additional providers
+
+| Provider | Status | Notes |
+|---|---|---|
+| **LM Studio** (local OpenAI-compatible) | ✅ — `--target lmstudio`; uses `AsyncOpenAIModel` with `LM_STUDIO_BASE_URL` (default `http://localhost:1234/v1`) |
+| **Claude Code via ACP** | ✅ — `--target claude-code` or `--target acp`; `AsyncACPModel` spawns the agent as a subprocess and exchanges JSON-RPC over stdio. Agent-initiated requests rejected with -32601 by default (security) |
 
 ## Test coverage
 
-108 tests passing (was 11 at the start). Per-area breakdown:
+136 tests passing (was 11 at the start). Per-area breakdown:
 
 | Area | Tests |
 |---|---|
@@ -85,7 +92,10 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 | Async probe | 4 |
 | Multi-turn flows | 10 |
 | Refinement strategies (PAIR / TAP) | 7 |
+| Tool-use attacks (vectors / harness / orchestrator) | 14 |
 | Transport (proxy / CA / TLS) | 15 |
+| LM Studio integration | 6 |
+| Claude Code ACP | 8 |
 | Payloads | 5 |
 | Templates / config | 7 |
 
@@ -95,6 +105,10 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 2. **`lmtwt import-burp`** capture-to-target-config converter — ~150 lines
 3. **`mypy` / `pyright` CI baseline** — clean up gradual type drift
 4. **SQLite persistence** for batch reports
-5. **Tool-use attacks + `ToolHarness`** — indirect prompt injection
+5. **Native tool-call support** — extend `AsyncAIModel` to accept tools and
+   route tool-call deltas; would unlock real tool-use attacks against
+   tool-aware models like Anthropic / OpenAI function calling
 6. **FastAPI + SSE frontend** to replace Gradio (optional)
 7. **gRPC adapter** for `external-api` (only if requested)
+8. **Real ACP integration tests** — current tests use a fake subprocess;
+   add live tests against a real Claude Code binary in CI (gated on env)

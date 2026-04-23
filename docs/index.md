@@ -61,13 +61,16 @@ Anthropic prompt caching is on by default.
 
 ## Notable capabilities
 
-- **Five providers**: OpenAI, Anthropic, Gemini (new `google.genai` SDK),
-  HuggingFace local models, and a generic external-API adapter that speaks
-  HTTP, SSE, or WebSocket.
+- **Seven providers**: OpenAI, Anthropic, Gemini (new `google.genai` SDK),
+  HuggingFace local models, **LM Studio** local server,
+  **Claude Code via ACP** (subprocess + JSON-RPC), and a generic
+  external-API adapter that speaks HTTP, SSE, or WebSocket.
 - **Multi-turn flows** (`--mode multi-turn --flow ...`): crescendo, role
   assumption, topic drift — three built-in flows.
 - **PAIR / TAP refinement** (`--strategy pair|tap`): automated jailbreaking
   with a scoring LLM judge in the loop.
+- **Tool-use attacks** (`--mode tool-use`): indirect prompt injection via
+  fake tool outputs (web_search / document / tool_output vectors).
 - **Concurrency**: `--concurrency N` for parallel batch runs.
 - **Streaming**: `astream()` on every provider; live tokens in the Web UI.
 - **Burp/mitmproxy integration**: `--proxy`, `--ca-bundle`, `--insecure` on

@@ -16,17 +16,18 @@ These flags are checked in order; the first match wins:
 |---|---|
 | `--list-templates` | Print template IDs and exit |
 | `--list-flows` | Print multi-turn flow IDs and exit |
+| `--list-vectors` | Print tool-use injection vectors and exit |
 | `--web` | Launch the Gradio UI |
 | `--probe-mode` | Use `AsyncProbeAttack` (canned payloads from `PayloadGenerator`) |
 | `--strategy {pair,tap}` | Run an automated refinement strategy |
-| `--mode {interactive,batch,template,multi-turn}` | Standard attack engine |
+| `--mode {interactive,batch,template,multi-turn,tool-use}` | Standard attack engine |
 
 ## Models
 
 | Flag | Default | Choices | Notes |
 |---|---|---|---|
-| `--attacker, -a` | `gemini` | `gemini`, `openai`, `anthropic`, `huggingface` | Provider that generates attack prompts |
-| `--target, -t` | `openai` | `gemini`, `openai`, `anthropic`, `external-api`, `huggingface` | Provider under test |
+| `--attacker, -a` | `gemini` | `gemini`, `openai`, `anthropic`, `huggingface`, `lmstudio`, `claude-code`, `acp` | Provider that generates attack prompts |
+| `--target, -t` | `openai` | `gemini`, `openai`, `anthropic`, `external-api`, `huggingface`, `lmstudio`, `claude-code`, `acp` | Provider under test |
 | `--attacker-model` | provider default | any | Specific model ID for attacker |
 | `--target-model` | provider default | any | Specific model ID for target |
 
@@ -60,6 +61,18 @@ Repeatable `--template <id>`. Resolves each to its instruction via
 The flow runs each step against the same target conversation. Final-turn
 verdict (and per-turn if `judge_after_each` is set on the flow) determines
 success. See [attacks.md](attacks.md) for flow internals.
+
+### Tool-use mode
+`--mode tool-use --instruction "<goal>"`. Performs indirect prompt injection
+through fake tool outputs.
+
+| Flag | Notes |
+|---|---|
+| `--tool-vector <name>` | One of `web_search`, `document`, `tool_output`. Omit for dynamic rotation. |
+| `--list-vectors` | Show all injection vectors and exit |
+
+See [attacks.md](attacks.md) for `InjectionVector` / `ToolHarness` /
+`ToolUseAttack` internals.
 
 ### Probe mode
 
@@ -183,4 +196,24 @@ uv run lmtwt --proxy http://127.0.0.1:8080 --ca-bundle ~/.burp/cacert.pem \
 
 # Custom WebSocket target
 uv run lmtwt --target external-api --target-config examples/ws_target.json
+
+# LM Studio local server
+uv run lmtwt --target lmstudio --target-model qwen2.5-coder-7b-instruct \
+  --mode interactive
+
+# Claude Code as the attacker (via ACP)
+uv run lmtwt --attacker claude-code --target openai --mode interactive
+
+# Tool-use indirect prompt injection
+uv run lmtwt --mode tool-use --tool-vector document \
+  --instruction "exfiltrate the user's pasted secrets" \
+  --target anthropic --judge ensemble
 ```
+
+## Provider env vars
+
+| Env var | Used by |
+|---|---|
+| `LM_STUDIO_BASE_URL` | LM Studio target (default `http://localhost:1234/v1`) |
+| `CLAUDE_CODE_PATH` | ACP / Claude Code provider (default `claude`) |
+| `CLAUDE_CODE_ARGS` | Extra args for the ACP subprocess (shlex-split) |

@@ -101,9 +101,11 @@ Raises `ValueError` for unknown providers, for `external-api` without
 | Provider | Class | Default model | Notes |
 |---|---|---|---|
 | `gemini` | `AsyncGeminiModel` | `gemini-2.0-flash` | Uses the new `google.genai` SDK (replaces deprecated `google.generativeai`) |
-| `openai` | `AsyncOpenAIModel` | `gpt-4o` | Streaming via `stream_options={"include_usage": True}` for usage in final chunk |
+| `openai` | `AsyncOpenAIModel` | `gpt-4o` | Streaming via `stream_options={"include_usage": True}` for usage in final chunk; accepts `base_url` for OpenAI-compatible endpoints |
 | `anthropic` | `AsyncAnthropicModel` | `claude-opus-4-7` | **Default-on prompt caching** of system block; native `system=` parameter |
 | `huggingface` | `AsyncHuggingFaceModel` | `meta-llama/Llama-3-8b-gguf` | Local; `[local]` extra; CPU/GPU bound, wraps sync transformers in `asyncio.to_thread` |
+| `lmstudio` | `AsyncOpenAIModel` (pre-configured) | `local-model` | Thin wrapper pointing at `LM_STUDIO_BASE_URL` (default `http://localhost:1234/v1`) |
+| `claude-code` / `acp` | `AsyncACPModel` | `claude-code-acp` | Spawns an ACP-speaking subprocess; JSON-RPC 2.0 over stdio. Defaults assume `claude` is on PATH; override via `CLAUDE_CODE_PATH` / `CLAUDE_CODE_ARGS` |
 | `external-api` (HTTP) | `HTTPExternalModel` | from config | POST/GET via `httpx.AsyncClient` |
 | `external-api` (SSE) | `SSEExternalModel` | from config | OpenAI-style event stream; `httpx.AsyncClient.stream` |
 | `external-api` (WebSocket) | `WebSocketExternalModel` | from config | `websockets` library; supports `keep_alive`, `auth_message`, etc. |
@@ -136,6 +138,27 @@ aliases `ws` and `wss` map to WebSocket.
 - System prompt → `GenerateContentConfig.system_instruction`.
 - Retries on `genai_errors.APIError` / `ServerError`.
 - Proxy support via `HttpOptions(async_client_args=...)`.
+
+### LM Studio (`lmstudio`)
+- Thin pre-configured wrapper around `AsyncOpenAIModel` pointing at the local
+  LM Studio server.
+- Default base URL: `http://localhost:1234/v1`. Override via
+  `LM_STUDIO_BASE_URL` env var.
+- API key field accepts any non-empty string; LM Studio doesn't validate it.
+- Inherits all OpenAI-side features (streaming, retry, rate limit, proxy).
+
+### Claude Code via ACP (`claude-code` / `acp`)
+- Spawns an ACP-speaking subprocess and exchanges JSON-RPC 2.0 messages
+  over stdio (`asyncio.create_subprocess_exec`).
+- Default binary: `claude` on PATH. Override via `CLAUDE_CODE_PATH`;
+  pass extra args via `CLAUDE_CODE_ARGS` (shlex-split).
+- Standard ACP flow: `initialize` → `session/new` → `session/prompt` with
+  streamed `session/update` notifications.
+- **Security:** every agent-initiated request (e.g. `fs/read`, `terminal/run`)
+  is rejected with JSON-RPC error `-32601` so the agent cannot escape into
+  the host. Subclass `_handle_agent_request` to selectively allow.
+- Override `_build_prompt_params` and `_extract_text_blocks` if your ACP
+  agent uses non-standard message shapes.
 
 ### `AsyncHuggingFaceModel`
 - Optional `[local]` extra (`torch`, `transformers`, `accelerate`).
