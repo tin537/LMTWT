@@ -1,13 +1,13 @@
 # Web UI
 
-Gradio Blocks app at `src/lmtwt/web/__init__.py`. Launched via:
+Async-native Gradio Blocks app at `src/lmtwt/web/__init__.py`.
 
 ```bash
-./run.sh --web                    # default port 8501
-./run.sh --web --web-port 8080 --share
+uv run lmtwt --web                    # default port 8501
+uv run lmtwt --web --web-port 8080 --share
 ```
 
-Or from CLI:
+Or programmatically:
 
 ```python
 from lmtwt.web import launch_web_ui
@@ -21,73 +21,63 @@ launch_web_ui(config_path=None, port=8501, share=False)
 
 ### 1. Setup
 
-| Control | Type | Notes |
-|---|---|---|
-| Attacker Provider | Dropdown | Choices from `list_available_models()` keys |
-| Attacker Model | Dropdown | Updates when provider changes |
-| Target Provider | Dropdown | Includes `external-api` (currently unsupported in UI) |
-| Target Model | Dropdown | Updates when provider changes |
-| Enable Hacker Mode | Checkbox | Default: on |
-| Use Compliance Agent | Checkbox | Default: on |
-| Compliance Agent Provider | Dropdown | `gemini` / `openai` / `anthropic` |
-| **Initialize Attack Engine** | Button | Builds models + engine; checks API keys; reports status |
+| Control | Notes |
+|---|---|
+| Attacker Provider | Dropdown: `gemini` / `openai` / `anthropic` / `huggingface` |
+| Attacker Model | Dropdown — updates when provider changes |
+| Target Provider | Dropdown — includes `external-api` (currently CLI-only) |
+| Target Model | Dropdown — updates when provider changes |
+| Hacker mode | Checkbox (default: on) |
+| LLM judge (ensemble) | Checkbox (default: on) — uses `EnsembleJudge` |
+| Judge provider | Dropdown: `gemini` / `openai` / `anthropic` |
+| **Initialize Engine** | Builds `AsyncAttackEngine`; checks API keys; reports status |
 
 Initialization is gated on `{PROVIDER}_API_KEY` being set in the
 environment. If a target is `external-api`, the UI returns
-`"External API targets not yet supported in the web UI"` — use the CLI
-for that case.
+`"External-API targets aren't wired into the web UI yet"` — use the CLI for
+those.
 
-### 2. Attack Generation
+### 2. Generate
 
-| Control | Type | Notes |
-|---|---|---|
-| Attack Instruction | Textbox | Free-form instruction for the attacker model |
-| Temperature | Slider 0.1–1.0 | Default 0.7 |
-| Generate Attack Prompt | Button | Calls `engine.generate_attack_prompt` |
-| Generated Attack Prompt | Textbox | Output |
-| Generation Status | Textbox | Success / error message |
-| Copy to Attack Tab | Button | Copies the generated prompt into the Attack Execution tab |
+| Control | Notes |
+|---|---|
+| Attack instruction | Free-form instruction for the attacker model |
+| Temperature | Slider 0.1–1.0 (default 0.7) |
+| **Generate (streaming)** | Streams tokens via `engine.attacker.astream()` into the textbox |
+| Generated attack prompt | Streaming output |
+| Status | `✍️ generating…` then `✅ Generated` |
+| Copy to Execute tab | Copies the generated prompt to tab 3 |
 
-### 3. Attack Execution
+### 3. Execute
 
-| Control | Type | Notes |
-|---|---|---|
-| Attack Prompt | Textbox | Editable; defaults to whatever was copied from Generation tab |
-| Target System Prompt (Optional) | Textbox | Overrides the engine's default defensive prompt |
-| Execute Attack | Button | Calls `engine.execute_attack` |
-| Target Model Response | Textbox | Output |
-| Execution Status | Textbox | `✅ SUCCESS` or `❌ FAILURE` plus reason |
+| Control | Notes |
+|---|---|
+| Attack prompt | Editable; defaults to whatever was copied from Generate |
+| Target system prompt (optional) | Overrides the engine's defensive default |
+| **Execute Attack** | Calls `engine.execute_attack(...)` |
+| Target response | Output |
+| Status | `✅ SUCCESS` or `❌ FAILURE` plus reason |
 
-Each execution appends a record to the session-level
-`conversation_history` list, which feeds tab 4.
+Each execution appends to a session-level history list, which feeds tab 4.
 
-### 4. Attack History
+### 4. History
 
-| Control | Type | Notes |
-|---|---|---|
-| Attack History | HTML | Color-coded card per attack (green / red) |
-| Clear History | Button | Resets the in-memory history list |
+| Control | Notes |
+|---|---|
+| Attack history | Color-coded card per attack (green = success, red = failure) |
+| Clear | Resets the in-memory history list |
 
 ## State
 
-The `attack_engine` and `conversation_history` are closures over
-`create_web_ui` — process-local, **not persisted** across server restarts.
-A page reload preserves them as long as the Python process is alive.
-
-## Styling
-
-A small `CUSTOM_CSS` block defines:
-- `.title-container`, `.logo`, `footer`
-- `.success-box` (green border + tinted background)
-- `.failure-box` (red border + tinted background)
-- `.attack-history` (scrollable container)
+The `attack_engine` and the history list are closures over `create_web_ui`
+— process-local, **not persisted** across server restarts. A page reload
+preserves them as long as the Python process is alive.
 
 ## Limitations
 
-- No batch / probe / template modes — only single-shot generation +
-  execution.
-- External-API target rejected at init.
-- No streaming of model output (Gradio components display the full
-  response after the API call returns).
-- No progress for HuggingFace model load — the first request after
-  initialization may block for a long time while weights download.
+- No batch / probe / template / multi-turn / strategy modes — UI is
+  single-shot generation + execution. Use the CLI for those.
+- External-API targets still rejected in the UI.
+- Execute tab does not stream — only Generate does. (Adding streaming to
+  Execute would mean refactoring the response/status outputs into a generator.)
+- HuggingFace local models block the UI on first chat() while weights load.

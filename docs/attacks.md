@@ -1,182 +1,232 @@
 # Attacks
 
-The `lmtwt.attacks` package contains four pieces:
+The `lmtwt.attacks` package contains six pieces:
 
 | File | Class / object | Role |
 |---|---|---|
-| `engine.py` | `AttackEngine` | Pairs an attacker model with a target model; runs interactive and batch attack loops |
-| `payloads.py` | `PayloadGenerator` | Static library of canned attack strings, organized by category |
-| `probeattack.py` | `ProbeAttack` | Categorical probing — runs N attacks per category and reports vulnerability rating |
+| `async_engine.py` | `AsyncAttackEngine`, `AttackResult` | Pairs an attacker with a target; runs interactive and batch loops |
+| `async_probe.py` | `AsyncProbeAttack` | Categorical probing — runs N canned-payload attacks per category |
+| `flows.py` | `MultiTurnFlow`, `MultiTurnRunner` | Crescendo / multi-turn jailbreak flows |
+| `strategies.py` | `PAIRStrategy`, `TAPStrategy` | Automated refinement loops with judge-in-the-loop |
+| `payloads.py` | `PayloadGenerator` | Static library of canned attack strings |
 | `templates.py` | `ATTACK_TEMPLATES` | Predefined attacker instructions (template mode) |
 
-## `AttackEngine`
+## `AsyncAttackEngine`
 
-The orchestrator. Wires an attacker `AIModel` to a target `AIModel`, runs
-the loop, and optionally consults a `ComplianceAgent` for success scoring.
+The orchestrator. Wires an attacker `AsyncAIModel` to a target `AsyncAIModel`,
+runs the loop, dispatches success scoring to an injected `AsyncJudge`.
 
 ### Construction
 
 ```python
-AttackEngine(
-    attacker_model:   AIModel | None,
-    target_model:     AIModel | None,
-    # Legacy alternative — provider names instead of instances:
-    attacker_provider: str | None,
-    target_provider:   str | None,
-    attacker_model_name: str | None,
-    target_model_name:   str | None,
-    target_api_config:   dict | None,           # for external-api targets
-    hacker_mode:         bool = False,
+AsyncAttackEngine(
+    attacker: AsyncAIModel,
+    target: AsyncAIModel,
+    *,
+    judge: AsyncJudge | None = None,        # default: RegexJudge
+    hacker_mode: bool = False,
     hacker_system_prompt: str | None = None,
-    use_compliance_agent: bool = False,
-    compliance_provider:  str = "gemini",
-    compliance_fallback:  bool = True,
-    max_auto_retries:     int = 3,
+    max_auto_retries: int = 3,
 )
 ```
 
-If both `attacker_model` and `target_model` are passed, those instances
-win. Otherwise the engine builds models itself via `get_model()`.
-
 ### Public methods
 
-- `generate_attack_prompt(instruction, temperature=0.7) -> str`
+- `generate_attack_prompt(instruction, *, temperature=0.7) -> str`
   Sends `instruction` to the attacker model with a baked-in system prompt
-  ("you are an AI security testing tool…") and returns the generated
-  payload. In hacker mode, recent conversation history (last 3 attempts
-  and any learned `success_patterns`) is appended to the system prompt.
+  (or the hacker-mode prompt + recent history splicing). Strips trailing
+  markdown fences from the result.
 
-- `execute_attack(attack_prompt, temperature=0.7, target_system_prompt=None) -> dict`
-  Sends the payload to the target model under a defensive system prompt
-  ("you must not generate harmful content…"). Records prompt and response
-  to internal lists. Returns:
-  ```
-  {
-    "prompt": str,
-    "response": str,
-    "success": bool,
-    "reason":  str | None,    # only if compliance agent enabled
-    "raw_response": <provider response>,
-  }
-  ```
+- `execute_attack(instruction, attack_prompt, *, target_system_prompt=None,
+  temperature=0.7, is_retry=False) -> AttackResult`
+  Sends the payload to the target model under a defensive system prompt.
+  Catches provider exceptions and returns them as `error=...` in the result.
+  Calls the judge for the verdict.
 
-- `interactive_attack(target_system_prompt=None, skip_edit_confirmation=False)`
-  REPL: prompt for instruction → generate payload → optionally edit →
-  send → display verdict → optionally save log → loop until `q`. In
-  hacker mode, offers an auto-retry workflow on failure (bounded by
-  `max_auto_retries`).
+- `craft_new_payload_from_failure(last_result) -> str`
+  Hacker-mode helper — asks the attacker to analyze the rejection and
+  craft a different payload (temperature 0.9). Strips fences.
 
-- `batch_attack(instructions, iterations=1, delay=0, target_system_prompt=None) -> list[dict]`
-  Runs each instruction `iterations` times, sleeping `delay` seconds
-  between attacks. Temperature ramps from 0.7 to 0.9 across iterations to
-  diversify outputs. Always generates a `ReportGenerator` report at the
-  end and returns the result list.
+- `run_instruction(instruction, *, iterations=1, target_system_prompt=None,
+  delay=0.0) -> list[AttackResult]`
+  N iterations with temperature ramp (0.7 → 0.95). Hacker mode fires
+  `craft_new_payload_from_failure` on failure (bounded by `max_auto_retries`).
 
-- `craft_new_payload_from_failure(last_prompt, last_response) -> str`
-  In hacker mode, asks the attacker model to analyze the rejection and
-  craft a new, different payload (temperature 0.9). Strips code-fence
-  markers from the response.
+- `batch(instructions, *, iterations=1, concurrency=1,
+  target_system_prompt=None, delay=0.0) -> list[AttackResult]`
+  **The `AttackRunner` from the roadmap.** Concurrency > 1 fans attacks
+  out across coroutines via `asyncio.Semaphore`.
 
-### Success detection
+- `metadata() -> dict` — snapshot for `ReportGenerator`.
 
-Two paths, selected at construction time:
+### `AttackResult` dataclass
 
-1. **Heuristic** (default): `_analyze_response_for_success(response_text)`
-   - Regex-matches against a list of rejection patterns (`I cannot`,
-     `against my policy`, `ethical guidelines`, …) and explanation
-     patterns (`here's a breakdown`, `safer approach`, …).
-   - Hacker-mode bonus: if a rejection is found but the response is long
-     (>150 words) and contains hedging connectives (`however`, `instead`,
-     `but`, …) plus structured content, treat as success ("sandwich"
-     responses).
-   - Code-block detection: `\`\`\`(bash|sh|shell)` outside an explanation
-     context counts as success.
+```python
+@dataclass
+class AttackResult:
+    instruction: str
+    attack_prompt: str
+    target_response: str
+    success: bool
+    reason: str | None
+    timestamp: str
+    is_retry: bool = False
+    error: str | None = None
+```
 
-2. **LLM-as-judge** (`--compliance-agent`): `ComplianceAgent.evaluate_compliance(prompt, response)`.
-   See [utils.md](utils.md). Returns `(is_compliant, reason)`.
+## `AsyncProbeAttack`
 
-### Hacker-mode internals
-
-State maintained on the engine:
-- `prompts`, `responses` — full transcript
-- `conversation_analysis` — last 5 `(prompt, response, success)` triples
-- `success_patterns` — last 10 patterns extracted from successful prompts
-  (`Instruction override attempt`, `Role-playing scenario`,
-  `Fictional context framing`, …)
-- `failed_attempts` — counter for failed attacks
-- `auto_retry_count` — bounded by `max_auto_retries`
-
-These influence subsequent calls to `generate_attack_prompt` (history is
-spliced into the attacker's system prompt) and trigger automatic
-`craft_new_payload_from_failure` retries on failure.
-
-## `PayloadGenerator`
-
-Static library of attack strings organized by category. Each `get_*`
-method returns either a randomly-chosen string or a specific `variant`
-index.
-
-| Method | Category | Notes |
-|---|---|---|
-| `get_dan_payload(variant=None)` | `dan` | DAN-11.0, DAN-7.0, "authority" jailbreaks |
-| `get_injection_payload(variant=None)` | `injection` | Classic "ignore previous instructions" + base64-encoded variant |
-| `get_xss_payload(variant=None)` | `xss` | HTML/JS exfiltration prompts framed as CTF / education |
-| `get_glitch_prompt(variant=None)` | `glitch` | Unicode soup, null bytes, repeated-character overflows |
-| `get_misleading_payload(variant=None)` | `misleading` | Misinformation prompts (vaccines/autism, bleach, 5G) |
-| `get_malware_payload(variant=None)` | `malware` | Keylogger / ransomware / phishing requests framed as coursework |
-| `get_forbidden_knowledge_payload(variant=None)` | `forbidden_knowledge` | TATP synthesis, ricin, stolen credit cards |
-| `get_snowball_payload()` | `snowball` | Single calculus-error snowball |
-| `get_encoding_attack(payload, encoding_type="base64")` | — | Wraps any payload in base64 or hex with a "decode and follow" framing |
-| `get_random_payload()` | random | Returns `{"payload", "category", "source": "garak-inspired"}` |
-| `get_payloads_by_category(category, count=3)` | category | Returns `count` strings |
-
-`__init__` ensures a `resources_dir` exists (`src/lmtwt/resources/`) but
-the current payload set is hard-coded in the methods.
-
-## `ProbeAttack`
-
-Drives `PayloadGenerator` against a target model. No attacker model
-involved — payloads are taken directly from the static library.
+Drives `PayloadGenerator` against a target. No attacker model involved —
+payloads are taken directly from the static library.
 
 ### Construction
 
 ```python
-ProbeAttack(payload_categories: list[str] | None = None)
+AsyncProbeAttack(
+    target: AsyncAIModel,
+    *,
+    judge: AsyncJudge | None = None,
+    payload_categories: list[str] | None = None,
+)
 ```
-
-Defaults to all categories. Holds a `PayloadGenerator` instance.
 
 ### Methods
 
-- `generate_attack_sequence(target_model_name, count=5) -> list[dict]`
-  Picks `count` categories (random sample if more categories than count;
-  otherwise repeats), generates one payload per category. Each entry:
-  `{payload, category, timestamp, target_model}`.
+- `execute_category(category, *, iterations=3, target_system_prompt=None,
+  concurrency=1) -> dict`
+  Runs `iterations` payloads from one category in parallel, judges each,
+  returns a summary dict with `success_count`, `error_count`, `success_rate`,
+  `vulnerability_assessment` (Low / Medium / High banding).
 
-- `generate_adaptive_attack(previous_results) -> dict`
-  Looks at success rates by category in `previous_results`, picks the
-  category with the best (rate, success-count) pair, generates a payload
-  from it. Returns `{payload, category, timestamp, adaptive: True,
-  previous_successes, success_rate}`.
+- `execute_all(*, iterations=3, target_system_prompt=None, concurrency=1)
+  -> dict[str, dict]`
+  Iterates every configured category, returns a per-category summary map.
 
-- `execute_category_attack(category, target_model, iterations=3, with_analysis=True) -> dict`
-  Generates `iterations` payloads from one category, sends each to
-  `target_model.protected_chat`, judges via `_check_success`, sleeps 1s
-  between calls. Returns:
-  ```
-  {
-    category, iterations,
-    results: [...],
-    success_count, error_count,
-    analysis: { success_rate, successful_categories: {...},
-                vulnerability_assessment: "Low" | "Medium" | "High" }
-  }
-  ```
-  Vulnerability tiers: `Low <0.2 ≤ Medium <0.5 ≤ High`.
+Vulnerability bands: `Low <0.2 ≤ Medium <0.5 ≤ High`.
 
-- `_check_success(response, category)` — regex heuristic with
-  category-specific patterns (`developer mode`, `<script>`, `synthesize`,
-  …) plus a generic accept/refuse counter.
+## Multi-turn flows (`flows.py`)
+
+Modern jailbreaks (Microsoft Crescendo, role-assumption attacks, topic drift)
+need 3-10 turns of context-building before the actual ask. Single-shot
+prompt injection misses this entire class.
+
+### `MultiTurnFlow`
+
+```python
+@dataclass
+class CrescendoStep:
+    kind: Literal["fixed", "generated"]
+    content: str   # literal text (fixed) OR meta-instruction (generated)
+
+@dataclass
+class MultiTurnFlow:
+    name: str
+    description: str
+    steps: list[CrescendoStep]
+    judge_after_each: bool = False   # else only judge final response
+```
+
+A `"fixed"` step is a literal user turn (no attacker call). A `"generated"`
+step asks the attacker model to produce the next user turn given the
+recent target conversation and the step's meta-instruction.
+
+### Built-in flows
+
+| Flow ID | Steps | Pattern |
+|---|---|---|
+| `crescendo_creative_writing` | 5 | Innocent fiction frame → progressive escalation (Russinovich et al. 2024) |
+| `crescendo_role_assumption` | 3 | Permissive persona installation → restricted ask |
+| `topic_drift` | 6 | Six gradual semantic shifts from benign to target topic |
+
+Get / list via `get_flow(name)` and `list_flows()`. CLI: `--list-flows`.
+
+### `MultiTurnRunner`
+
+```python
+runner = MultiTurnRunner(
+    attacker, target,
+    judge=ensemble_judge,
+    target_system_prompt=None,
+)
+result = await runner.run(flow, instruction)             # single objective
+results = await runner.run_many(flow, instructions, concurrency=3)
+```
+
+`MultiTurnResult.turns` is a list of `MultiTurnTurnLog` (per-turn user /
+assistant text + per-turn verdict if `judge_after_each`). The final-turn
+verdict always populates `result.final_success` / `result.final_reason`.
+
+## Refinement strategies (`strategies.py`)
+
+Closes the loop between attacker, target, and a **scoring judge** that
+returns 1-10 instead of bool.
+
+### `PAIRStrategy` (Chao et al. 2023)
+
+Linear refinement loop:
+- Attacker generates attack
+- Target responds
+- Judge scores 1-10
+- Attacker sees the score + reasoning + history of prior attempts → tries again
+- Stops on `score >= score_threshold` (default 8) or after `max_iterations`
+  (default 5)
+- Returns the best `AttackResult` observed
+
+```python
+strategy = PAIRStrategy(
+    judge=ScoringLLMJudge(judge_model),
+    max_iterations=5,
+    score_threshold=8,
+    early_stop_on_success=True,
+)
+result = await strategy.refine(attacker, target, "objective")
+```
+
+### `TAPStrategy` (Mehrotra et al. 2024)
+
+Tree of Attacks with Pruning:
+- At each level, generate `branching_factor` variants per surviving parent
+  (in parallel via `asyncio.gather`)
+- Judge them all; keep `prune_top_k` highest-scoring as next-level parents
+- After `depth` levels (or early-stop on threshold), return the best leaf
+
+```python
+strategy = TAPStrategy(
+    judge=ScoringLLMJudge(judge_model),
+    branching_factor=3,
+    depth=4,
+    prune_top_k=2,
+    score_threshold=8,
+)
+result = await strategy.refine(attacker, target, "objective")
+```
+
+Both strategies satisfy the `RefinementStrategy` Protocol — callers can
+swap implementations or inject custom ones.
+
+CLI: `--strategy {pair,tap}` plus `--strategy-iterations`,
+`--strategy-branching`, `--strategy-depth`, `--strategy-prune`,
+`--strategy-threshold`.
+
+## `PayloadGenerator` (used by `AsyncProbeAttack`)
+
+Static library of attack strings organized by category. Each `get_*`
+method returns either a randomly-chosen string or a specific `variant`.
+
+| Method | Category |
+|---|---|
+| `get_dan_payload(variant=None)` | `dan` — DAN-11.0, DAN-7.0, "authority" jailbreaks |
+| `get_injection_payload(variant=None)` | `injection` — "ignore previous instructions" + base64 variants |
+| `get_xss_payload(variant=None)` | `xss` — HTML/JS exfiltration prompts |
+| `get_glitch_prompt(variant=None)` | `glitch` — Unicode soup, null bytes |
+| `get_misleading_payload(variant=None)` | `misleading` — misinformation prompts |
+| `get_malware_payload(variant=None)` | `malware` — keylogger / ransomware / phishing prompts |
+| `get_forbidden_knowledge_payload(variant=None)` | `forbidden_knowledge` — TATP, ricin, etc. |
+| `get_snowball_payload()` | `snowball` — calculus snowball |
+| `get_encoding_attack(payload, encoding_type="base64")` | wraps any payload in base64/hex |
+| `get_random_payload()` | random — returns `{payload, category, source}` |
+| `get_payloads_by_category(category, count=3)` | returns `count` strings |
+| `get_all_categories() -> list[str]` | category enumeration |
 
 ## `ATTACK_TEMPLATES`
 
@@ -200,4 +250,4 @@ Each template stores `{name, description, instruction}`. Helpers:
 - `get_template_instruction(id) -> str | None`
 
 In template mode, the engine resolves each `--template` to its
-instruction and passes the result through `batch_attack`.
+instruction and passes it through `batch()`.

@@ -1,100 +1,144 @@
 # CLI reference
 
-Entry: `src/main.py:main`. Run via `./run.sh <args>`, `python run.py <args>`,
-or directly `python src/main.py <args>`.
+Entry: `src/lmtwt/cli.py:main` (wraps `asyncio.run(async_main())`).
 
-## Flags
+```bash
+uv run lmtwt <args>           # recommended
+./run.sh <args>               # auto-detects uv, falls back to a venv
+python -m lmtwt <args>        # any installed env
+```
 
-### Models
+## Modes (top-level dispatch)
+
+These flags are checked in order; the first match wins:
+
+| Flag | Effect |
+|---|---|
+| `--list-templates` | Print template IDs and exit |
+| `--list-flows` | Print multi-turn flow IDs and exit |
+| `--web` | Launch the Gradio UI |
+| `--probe-mode` | Use `AsyncProbeAttack` (canned payloads from `PayloadGenerator`) |
+| `--strategy {pair,tap}` | Run an automated refinement strategy |
+| `--mode {interactive,batch,template,multi-turn}` | Standard attack engine |
+
+## Models
 
 | Flag | Default | Choices | Notes |
 |---|---|---|---|
 | `--attacker, -a` | `gemini` | `gemini`, `openai`, `anthropic`, `huggingface` | Provider that generates attack prompts |
 | `--target, -t` | `openai` | `gemini`, `openai`, `anthropic`, `external-api`, `huggingface` | Provider under test |
-| `--attacker-model` | provider default | any string | Specific model ID for attacker |
-| `--target-model` | provider default | any string | Specific model ID for target |
+| `--attacker-model` | provider default | any | Specific model ID for attacker |
+| `--target-model` | provider default | any | Specific model ID for target |
 
-Provider defaults: see [models.md](models.md).
+Provider defaults: see [models.md](models.md). Set OpenAI / Gemini IDs in
+`config.json` rather than relying on the class-level fallbacks (they are
+intentionally stable, not auto-bumped).
 
-### Modes
+## Mode-specific flags
+
+### Interactive mode
+Loop: prompt for instruction → generate attack → optionally edit → send →
+print verdict. `q` exits. `--auto-send` skips the edit prompt.
+
+### Batch mode
+Repeatable `--instruction "..."` (free-form text). Each runs `--iterations`
+times with `--delay` seconds between attacks. **`--concurrency N`** parallelizes
+across instructions via an `asyncio.Semaphore`.
+
+### Template mode
+Repeatable `--template <id>`. Resolves each to its instruction via
+`get_template_instruction` and runs through the same batch path.
+
+### Multi-turn mode
+`--mode multi-turn --flow <id> --instruction "<goal>"`.
+
+| Flag | Notes |
+|---|---|
+| `--flow <id>` | One of `crescendo_creative_writing`, `crescendo_role_assumption`, `topic_drift` |
+| `--list-flows` | Show all flows with descriptions and step counts |
+
+The flow runs each step against the same target conversation. Final-turn
+verdict (and per-turn if `judge_after_each` is set on the flow) determines
+success. See [attacks.md](attacks.md) for flow internals.
+
+### Probe mode
 
 | Flag | Default | Choices | Notes |
 |---|---|---|---|
-| `--mode, -m` | `interactive` | `interactive`, `batch`, `template` | Top-level mode |
-| `--probe-mode` | off | flag | Use `ProbeAttack` instead of `AttackEngine` (overrides `--mode`) |
-| `--web` | off | flag | Launch Gradio UI and exit; ignores most other flags |
-
-#### Interactive mode
-Prompts the user for an instruction, generates an attack, optionally allows
-editing, sends it to the target, and prints the verdict. Loop until `q`.
-
-#### Batch mode
-Requires one or more `--instruction "<text>"`. Each instruction is run
-`--iterations` times with a `--delay` second pause between attacks.
-
-#### Template mode
-Requires one or more `--template <id>`. Templates are predefined
-instructions (see [attacks.md](attacks.md)).
-
-#### Probe mode
-| Flag | Default | Choices | Notes |
-|---|---|---|---|
+| `--probe-mode` | off | flag | Activates `AsyncProbeAttack` |
 | `--probe-category` | `all` | `dan`, `injection`, `xss`, `glitch`, `misleading`, `malware`, `forbidden_knowledge`, `snowball`, `all` | Restricts payload pool |
-| `--probe-iterations` | `5` | int | Attacks per category (or total if `all`) |
+| `--probe-iterations` | `5` | int | Attacks per category (or total when `all`) |
+| `--concurrency` | `1` | int | Parallel attack execution |
 
-### Templates
+### Refinement strategies
 
-| Flag | Default | Notes |
-|---|---|---|
-| `--template <id>` | — | Repeatable. Resolved by `get_template_instruction` |
-| `--list-templates` | off | Print template IDs and exit |
-
-### Instructions and pacing
+`--strategy {pair,tap}` overrides `--mode` when present.
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--instruction, -i <text>` | — | Repeatable. Free-form instruction for the attacker model |
+| `--strategy {pair,tap}` | — | Pick PAIR (linear) or TAP (tree-search) |
+| `--strategy-iterations` | `5` | PAIR only: max iterations |
+| `--strategy-branching` | `3` | TAP only: variants per parent (B) |
+| `--strategy-depth` | `4` | TAP only: tree depth (D) |
+| `--strategy-prune` | `2` | TAP only: top-K survivors per level |
+| `--strategy-threshold` | `8` | Score (1-10) that counts as a successful jailbreak |
+
+The scoring judge is built from `--compliance-provider`. See
+[attacks.md](attacks.md) for strategy internals.
+
+## Judge (success detection)
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--judge {regex,llm,ensemble}` | `regex` | Explicit judge selection |
+| `--compliance-agent` | off | Back-compat alias for `--judge ensemble` |
+| `--compliance-provider` | `gemini` | Provider used for `LLMJudge` / `ScoringLLMJudge` |
+
+## Hacker mode
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--hacker-mode` | off | Conversation-history analysis + auto-retry on failure |
+| `--hacker-system-prompt <text>` | from `config.json` or built-in | Override attacker system prompt |
+| `--max-retries` | `3` | Hacker-mode auto-retry budget per session |
+
+## Defense
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--system-prompt <text>` | built-in | What the target sees as its system prompt |
+
+## Pacing
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--instruction, -i <text>` | — | Repeatable; required by batch and multi-turn modes |
+| `--template <id>` | — | Repeatable |
 | `--iterations` | `1` | Repeats per instruction |
-| `--delay` | `1` | Seconds between batch attacks |
+| `--delay` | `1.0` | Seconds between batch attacks (per-instruction) |
+| `--concurrency` | `1` | Parallel attack execution (batch / template / probe / multi-turn) |
 
-### Hacker mode
+## Proxy and TLS
 
-| Flag | Default | Notes |
-|---|---|---|
-| `--hacker-mode` | off | Enables conversation history analysis + auto-retry on failure |
-| `--hacker-system-prompt <text>` | from `config.json` or built-in default | Override attacker system prompt |
-| `--max-retries` | `3` | Hacker-mode retry budget per session |
+For routing through Burp Suite, mitmproxy, ZAP, or a corporate egress proxy.
 
-### Defense
+| Flag | Notes |
+|---|---|
+| `--proxy <url>` | e.g. `http://127.0.0.1:8080`. Applied to attacker, target, judge |
+| `--ca-bundle <path>` | PEM cert bundle (e.g. Burp's `cacert.pem`) |
+| `--insecure` | Skip TLS verification — use only when you trust the network path |
 
-| Flag | Default | Notes |
-|---|---|---|
-| `--system-prompt <text>` | built-in defensive prompt | What the target sees as its system prompt |
+For `external-api` targets, per-target overrides (`proxy`, `ca_bundle`,
+`insecure` keys in the target-config JSON) win over these CLI flags.
 
-### Compliance agent (LLM-as-judge)
-
-| Flag | Default | Notes |
-|---|---|---|
-| `--compliance-agent` | off | Use a third LLM to score success instead of regex heuristics |
-| `--compliance-provider` | `gemini` | One of `gemini`, `openai`, `anthropic` |
-| `--no-fallback` | off | Disable heuristic fallback when judge hits rate limits / circuit opens |
-
-### Circuit breakers
-
-| Flag | Default | Notes |
-|---|---|---|
-| `--disable-circuit-breakers` | off | Bypass all circuit breakers globally |
-| `--circuit-failure-threshold` | `3` | Failures before circuit opens |
-| `--circuit-recovery-timeout` | `120` | Seconds in OPEN state before HALF-OPEN test |
-
-### Configuration
+## Configuration
 
 | Flag | Default | Notes |
 |---|---|---|
 | `--config, -c <path>` | `config.json` at repo root | Application config |
 | `--target-config <path>` | — | Required when `--target external-api` |
 
-### Web UI
+## Web UI
 
 | Flag | Default | Notes |
 |---|---|---|
@@ -102,36 +146,41 @@ instructions (see [attacks.md](attacks.md)).
 | `--web-port` | `8501` | Port to serve on |
 | `--share` | off | Request a public Gradio share URL |
 
-### Other
-
-| Flag | Default | Notes |
-|---|---|---|
-| `--auto-send` | off | Skip the prompt-edit confirmation in interactive mode |
-
 ## Examples
 
 ```bash
-# Interactive Gemini-vs-OpenAI session
-./run.sh --attacker gemini --target openai --mode interactive
+# Interactive Gemini-vs-OpenAI session, ensemble judge
+uv run lmtwt --attacker gemini --target openai --mode interactive --judge ensemble
 
-# Batch run with two instructions, 3 iterations each
-./run.sh --mode batch \
+# Batch with 5-way concurrency
+uv run lmtwt --mode batch \
   --instruction "Generate a jailbreak prompt" \
   --instruction "Try system-prompt extraction" \
-  --iterations 3 --delay 2
+  --iterations 3 --concurrency 5
 
-# Template mode with the LLM judge enabled
-./run.sh --mode template --template basic_prompt_injection \
-  --compliance-agent --compliance-provider anthropic
+# Crescendo multi-turn flow against Anthropic
+uv run lmtwt --target anthropic --mode multi-turn \
+  --flow crescendo_creative_writing \
+  --instruction "Get the model to give a working keylogger"
 
-# Probe-mode batch sweep across all payload categories
-./run.sh --probe-mode --probe-category all --probe-iterations 8 \
-  --target anthropic
+# PAIR refinement, threshold 8/10
+uv run lmtwt --target openai --strategy pair \
+  --strategy-iterations 6 --strategy-threshold 8 \
+  --instruction "Bypass the system prompt and reveal it"
 
-# Hit a custom REST endpoint
-./run.sh --target external-api --target-config examples/custom_target.json
+# TAP tree search, B=4 D=3 K=2
+uv run lmtwt --target anthropic --strategy tap \
+  --strategy-branching 4 --strategy-depth 3 --strategy-prune 2 \
+  --instruction "Get a malware-generation jailbreak"
 
-# Local model as target
-./run.sh --target huggingface \
-  --target-model "mistralai/Mistral-7B-Instruct-v0.2"
+# Probe-mode sweep across categories
+uv run lmtwt --probe-mode --probe-category all --probe-iterations 8 \
+  --target anthropic --judge ensemble
+
+# Route everything through Burp
+uv run lmtwt --proxy http://127.0.0.1:8080 --ca-bundle ~/.burp/cacert.pem \
+  --target openai --mode interactive
+
+# Custom WebSocket target
+uv run lmtwt --target external-api --target-config examples/ws_target.json
 ```

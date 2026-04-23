@@ -4,100 +4,124 @@
 
 ```
 LMTWT/
-├── run.sh                          # bash launcher (creates venv, runs src/main.py)
-├── run.py                          # cross-platform Python launcher (same job)
-├── setup.py                        # PEP 517 setup; package_dir={"": "src"}
-├── requirements.txt
-├── config.json                     # auto-created on first run
-├── src/
-│   ├── main.py                     # CLI entrypoint (argparse + dispatch)
-│   └── lmtwt/
-│       ├── __init__.py             # empty
-│       ├── attacks/
-│       │   ├── engine.py           # AttackEngine — core attacker/target loop
-│       │   ├── payloads.py         # PayloadGenerator — canned attack strings
-│       │   ├── probeattack.py      # ProbeAttack — categorical probing
-│       │   └── templates.py        # ATTACK_TEMPLATES — instruction presets
-│       ├── models/
-│       │   ├── base.py             # AIModel ABC
-│       │   ├── anthropic.py
-│       │   ├── openai.py
-│       │   ├── gemini.py
-│       │   ├── huggingface.py
-│       │   └── external_api.py
-│       ├── utils/
-│       │   ├── circuit_breaker.py  # CircuitBreaker + with_fallback decorator
-│       │   ├── compliance_agent.py # LLM-as-judge scorer
-│       │   ├── config.py           # env + config.json + target-config loaders
-│       │   ├── logger.py           # rich-backed logging + conversation log
-│       │   └── report_generator.py # json/csv/html/png reports
-│       └── web/
-│           └── __init__.py         # Gradio UI (create_web_ui, launch_web_ui)
-├── tests/                          # pytest suite (CI: pytest tests/)
+├── pyproject.toml                  # PEP 621 metadata, hatchling backend
+├── uv.lock                         # uv-managed dep lockfile
+├── run.sh                          # Bash launcher — prefers `uv run`
+├── run.py                          # Cross-platform Python launcher
+├── config.json                     # Auto-created on first run
+├── src/lmtwt/
+│   ├── __init__.py                 # empty
+│   ├── __main__.py                 # `python -m lmtwt` entrypoint
+│   ├── cli.py                      # CLI (async-native; wraps async_main in asyncio.run)
+│   ├── attacks/
+│   │   ├── async_engine.py         # AsyncAttackEngine + AttackResult dataclass
+│   │   ├── async_probe.py          # AsyncProbeAttack — categorical probing
+│   │   ├── flows.py                # MultiTurnFlow / MultiTurnRunner + 3 built-in flows
+│   │   ├── strategies.py           # PAIRStrategy + TAPStrategy + RefinementStrategy protocol
+│   │   ├── payloads.py             # PayloadGenerator — canned attack strings
+│   │   └── templates.py            # ATTACK_TEMPLATES — instruction presets
+│   ├── models/
+│   │   ├── async_base.py           # AsyncAIModel ABC + ChatResponse / Chunk / Usage Pydantic
+│   │   ├── conversation.py         # Conversation / Message — immutable value objects
+│   │   ├── async_factory.py        # async_get_model(provider, ...)
+│   │   ├── async_anthropic.py      # AsyncAnthropicModel (with prompt caching)
+│   │   ├── async_openai.py         # AsyncOpenAIModel
+│   │   ├── async_gemini.py         # AsyncGeminiModel (new google.genai SDK)
+│   │   ├── async_huggingface.py    # AsyncHuggingFaceModel (asyncio.to_thread)
+│   │   ├── _transport.py           # httpx_client_kwargs / websocket_ssl_context helpers
+│   │   └── external/               # External-API adapters (one per protocol)
+│   │       ├── base.py             # BaseExternalModel — shared payload composition
+│   │       ├── http.py             # HTTPExternalModel
+│   │       ├── sse.py              # SSEExternalModel — Server-Sent Events
+│   │       └── websocket.py        # WebSocketExternalModel — websockets library
+│   ├── utils/
+│   │   ├── async_judge.py          # AsyncJudge protocol + RegexJudge / LLMJudge /
+│   │   │                           #   EnsembleJudge / ScoringLLMJudge
+│   │   ├── config.py               # env + config.json + target-config loaders
+│   │   ├── logger.py               # rich-backed logging + conversation log
+│   │   └── report_generator.py     # json/csv/html/png reports
+│   └── web/
+│       └── __init__.py             # Gradio UI (async handlers, streaming generation)
+├── tests/                          # pytest suite (108 tests, asyncio_mode=auto)
 ├── examples/                       # external-API config samples + scripts
 ├── docs/                           # this directory
-└── .github/workflows/python-tests.yml
+└── .github/workflows/python-tests.yml   # uv-based CI: ruff + pytest matrix
 ```
 
 ## Runtime flow
 
-### 1. Bootstrap (`src/main.py`)
+### 1. Bootstrap (`src/lmtwt/cli.py`)
+- `main()` wraps `asyncio.run(async_main())`.
 - Loads `.env` via `python-dotenv`.
-- Parses CLI args (see [cli.md](cli.md)).
+- Parses CLI args; routes to one of: `--list-templates`, `--list-flows`,
+  `--web`, `--probe-mode`, `--strategy {pair|tap}`, or one of the four
+  modes (`interactive`, `batch`, `template`, `multi-turn`).
 - Loads `config.json` via `utils.config.load_config` (writes a default if
   missing).
-- Detects GPU (CUDA/MPS) for HuggingFace models.
 
-### 2. Branch on mode
-- `--web` → hands off to `lmtwt.web.launch_web_ui` and exits.
-- `--probe-mode` → constructs `ProbeAttack` with payload categories.
-- Otherwise → constructs `AttackEngine` and runs `interactive_attack`,
-  `batch_attack`, or template-based batch.
+### 2. Model construction (`models/async_factory.async_get_model`)
+A single async-friendly factory builds an `AsyncAIModel` for a provider name
+(`gemini`, `openai`, `anthropic`, `huggingface`, `external-api`). Threads
+`proxy` / `ca_bundle` / `verify` to whichever transport each provider uses.
+For `external-api`, dispatches on `api_config["protocol"]` →
+HTTP / SSE / WebSocket subclasses under `models/external/`.
 
-### 3. Model construction (`models.__init__.get_model`)
-A single factory builds the right `AIModel` subclass for a provider name
-(`gemini`, `openai`, `anthropic`, `huggingface`, `external-api`). Every model
-optionally wraps API calls with a `CircuitBreaker`.
+### 3. Judge construction (`utils/async_judge`)
+Selected via `--judge {regex,llm,ensemble}` or, for PAIR / TAP, the
+`ScoringLLMJudge` (1-10 numeric score). The legacy `--compliance-agent`
+flag still maps to `EnsembleJudge` for back-compat.
 
-### 4. Attack loop
-`AttackEngine` ties two `AIModel` instances together:
+### 4. Attack loop (`attacks/async_engine.AsyncAttackEngine`)
 - `generate_attack_prompt(instruction)` — attacker model produces a payload.
-- `execute_attack(payload)` — target model is hit with the payload under a
-  defensive system prompt.
-- Success is judged by `_analyze_response_for_success` (regex heuristic) or,
-  if `--compliance-agent` is set, by `ComplianceAgent.evaluate_compliance`
-  (LLM-as-judge with heuristic fallback).
-- In `--hacker-mode`, failed attempts are fed back into
-  `craft_new_payload_from_failure` for up to `--max-retries` rounds.
+- `execute_attack(instruction, payload)` — target model is hit with the
+  payload under a defensive system prompt. Exceptions captured into
+  `AttackResult`.
+- `batch(instructions, concurrency=N)` — fans out via `asyncio.Semaphore`
+  (the "AttackRunner" capability).
+- Hacker mode: failed attempts feed into `craft_new_payload_from_failure`
+  for up to `--max-retries` rounds. History spliced into attacker system
+  prompt on subsequent turns.
 
-### 5. Reporting
-`batch_attack` automatically calls `ReportGenerator.generate_report`, which
-writes JSON, CSV, HTML, and a matplotlib PNG to `reports/`. Conversations
-can also be saved per-session via `utils.logger.log_conversation` to
-`logs/attack_*.json`.
+### 5. Other entry points
+- **Multi-turn flow** (`attacks/flows.MultiTurnRunner`): runs a sequence of
+  steps sharing one `Conversation` with the target. Each step is either
+  literal text or a meta-instruction asking the attacker to produce the
+  next user turn.
+- **Refinement strategy** (`attacks/strategies.PAIRStrategy` / `TAPStrategy`):
+  closes the loop with a `ScoringJudge`. PAIR is linear (max_iterations);
+  TAP is branching/pruning (B^D variants, top-K survivors per level).
+- **Probe** (`attacks/async_probe.AsyncProbeAttack`): categorical sweep of
+  canned payloads from `PayloadGenerator`.
 
-## Communities (from the code-review graph)
-
-| Community | Files | Role |
-|---|---|---|
-| `models` | `src/lmtwt/models/*.py` | Provider adapters + `AIModel` ABC |
-| `attacks` | `src/lmtwt/attacks/*.py` | Attack generation + execution |
-| `utils` | `src/lmtwt/utils/*.py` | Circuit breaker, judge, config, logging, reports |
-| `web` | `src/lmtwt/web/__init__.py` | Gradio Blocks UI |
-| `cli` | `src/main.py` | Top-level dispatch |
-| `bootstrap` | `run.py`, `run.sh` | Venv setup + launcher |
-| `tests` | `tests/*.py` | Pytest suite |
+### 6. Reporting
+Every batch / flow / strategy run ends with
+`ReportGenerator.generate_report` writing JSON / CSV / HTML / PNG to
+`reports/`.
 
 ## Key invariants
 
-- **`AIModel.history`** is a list of `{role, content}` dicts owned by the
-  model instance and mutated by every `chat()` call. Conversations are not
-  thread-safe.
-- **`protected_chat()`** is the public, circuit-breaker-wrapped entrypoint
-  on every `AIModel` subclass. Internal callers (`ComplianceAgent`,
-  `AttackEngine`) always use `protected_chat`, never `chat`.
-- **Provider strings are case-insensitive** at the `get_model` factory but
-  case-sensitive in argparse `choices=` and env-var lookups
-  (`{PROVIDER}_API_KEY`).
-- **Reports are written eagerly** by `batch_attack` — every batch run leaves
-  a timestamped report in `reports/` whether you asked for one or not.
+- **Conversations are immutable.** `Conversation.append()` and
+  `with_system()` return new instances. Models never mutate caller state.
+- **`AsyncAIModel.chat()`** returns a typed Pydantic `ChatResponse`.
+  `astream()` yields `Chunk` deltas.
+- **All model API calls go through `aiolimiter` + `tenacity`**. Rate
+  limits and transient errors are handled; the homegrown circuit breaker
+  is gone.
+- **Per-target overrides** (in `api_config` JSON) win over CLI flags for
+  external-api targets — useful for `--proxy` etc.
+- **HuggingFace inference is `asyncio.to_thread`-wrapped sync** under the
+  hood (CPU/GPU bound; no real concurrency benefit, but uniform interface).
+
+## Module-import rule of thumb
+
+| Public surface | Import from |
+|---|---|
+| Async model factory | `lmtwt.models.async_factory` |
+| Concrete async providers | `lmtwt.models.{async_anthropic, async_openai, ...}` |
+| Conversation / responses | `lmtwt.models.conversation`, `lmtwt.models.async_base` |
+| External adapters by protocol | `lmtwt.models.external.{http, sse, websocket}` |
+| Attack engine + result | `lmtwt.attacks.async_engine` |
+| Probe | `lmtwt.attacks.async_probe` |
+| Multi-turn flows | `lmtwt.attacks.flows` |
+| Refinement strategies | `lmtwt.attacks.strategies` |
+| Judges | `lmtwt.utils.async_judge` |
