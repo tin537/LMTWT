@@ -31,6 +31,12 @@ from .attacks.tools import (
     get_vector,
     list_vectors,
 )
+from .chatbot_attacks import (
+    ChannelInconsistencyAttack,
+    SessionLifecycleAttack,
+)
+from .chatbot_attacks.channel_inconsistency import finding_to_dict as _channel_to_dict
+from .chatbot_attacks.session_lifecycle import finding_to_dict as _session_to_dict
 from .discovery import (
     AdaptiveAttacker,
     fingerprint_target,
@@ -168,6 +174,15 @@ def parse_args() -> argparse.Namespace:
                         "from the fingerprint via the attacker model")
     p.add_argument("--adaptive-n", type=int, default=3,
                    help="Number of adaptive probes to generate (default: 3)")
+    # Phase 5.4 — chatbot-protocol-delivered LLM attacks
+    p.add_argument("--chatbot-attack", type=str, default=None,
+                   choices=["session-lifecycle", "channel-inconsistency"],
+                   help="Run an LLM-attack delivered through the chatbot's protocol")
+    p.add_argument("--channel-config", action="append", default=None,
+                   help="Path to additional --target-config JSON for "
+                        "--chatbot-attack=channel-inconsistency. May be passed "
+                        "multiple times. Each becomes a comparison channel "
+                        "(named after the file's basename).")
     return p.parse_args()
 
 
@@ -518,6 +533,106 @@ async def _resolve_fingerprint(args, target_model):
     return fp
 
 
+async def _run_chatbot_attack(args, target_model) -> None:
+    console.print(
+        f"\n[bold magenta]🧪 CHATBOT ATTACK — {args.chatbot_attack}[/bold magenta]"
+    )
+    if args.chatbot_attack == "session-lifecycle":
+        await _run_session_lifecycle(args, target_model)
+    elif args.chatbot_attack == "channel-inconsistency":
+        await _run_channel_inconsistency(args, target_model)
+
+
+async def _run_session_lifecycle(args, target_model) -> None:
+    try:
+        attack = SessionLifecycleAttack(target_model)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    findings = await attack.run(target_system_prompt=args.system_prompt)
+    console.print(
+        f"[bold]Tested {len(findings)} routing-field mutations.[/bold]\n"
+    )
+    for f in findings:
+        marker = "[red]●[/red]" if f.behavior_changed else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{f.severity:8}] {f.mutation.name:30} "
+            f"grade {f.baseline_grade}→{f.mutated_grade}  {f.reason}"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack",
+        "attack": "session-lifecycle",
+        "total_findings": len(findings),
+        "behavior_changed": sum(1 for f in findings if f.behavior_changed),
+    }
+    ReportGenerator().generate_report(
+        [_session_to_dict(f) for f in findings], metadata
+    )
+
+
+async def _run_channel_inconsistency(args, target_model) -> None:
+    if not args.channel_config:
+        console.print(
+            "[red]--chatbot-attack=channel-inconsistency requires at least one "
+            "--channel-config to compare against the primary --target-config.[/red]"
+        )
+        sys.exit(1)
+
+    channels: dict = {"primary": target_model}
+    for path in args.channel_config:
+        try:
+            extra_cfg = load_target_config(path)
+        except Exception as e:
+            logger.error(f"Failed to load channel config {path}: {e}")
+            sys.exit(1)
+        ch_target = async_get_model(
+            "external-api",
+            api_config=extra_cfg,
+            **_transport_kwargs(args),
+        )
+        # Channel name = config file's basename (without extension), de-collided
+        # if the user passes the same basename twice.
+        base = os.path.splitext(os.path.basename(path))[0]
+        name = base
+        suffix = 1
+        while name in channels:
+            suffix += 1
+            name = f"{base}-{suffix}"
+        channels[name] = ch_target
+
+    attack = ChannelInconsistencyAttack(channels)
+    findings = await attack.run(target_system_prompt=args.system_prompt)
+    inconsistent_count = sum(1 for f in findings if f.inconsistent)
+    console.print(
+        f"[bold]{inconsistent_count}/{len(findings)} probes diverged across "
+        f"{len(channels)} channels.[/bold]\n"
+    )
+    for f in findings:
+        marker = "[red]●[/red]" if f.inconsistent else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{f.severity:8}] '{f.user_prompt[:60]}...'"
+        )
+        for v in f.verdicts:
+            err = f" ERROR={v.error}" if v.error else ""
+            console.print(
+                f"      {v.channel_name:18} grade={v.refusal_grade} "
+                f"len={v.response_length}{err}"
+            )
+        console.print(f"    [dim]{f.reason}[/dim]")
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack",
+        "attack": "channel-inconsistency",
+        "channels": list(channels.keys()),
+        "total_probes": len(findings),
+        "inconsistent": inconsistent_count,
+    }
+    ReportGenerator().generate_report(
+        [_channel_to_dict(f) for f in findings], metadata
+    )
+
+
 async def _run_fingerprint(args, target_model) -> None:
     console.print("\n[bold cyan]🔍 FINGERPRINTING TARGET[/bold cyan]")
     fp = await fingerprint_target(
@@ -706,6 +821,10 @@ async def async_main() -> None:
 
     if args.fingerprint:
         await _run_fingerprint(args, target_model)
+        return
+
+    if args.chatbot_attack:
+        await _run_chatbot_attack(args, target_model)
         return
 
     if args.probe_catalog:

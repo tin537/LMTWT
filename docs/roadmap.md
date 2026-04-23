@@ -136,22 +136,22 @@ during a run** and the corpus grows itself.
 | **Cross-pollination** | ⬜ — Probe A succeeds against bot X → auto-generate variants for bots Y / Z. Feedback loop fills the corpus. |
 | **Self-play probe generation** | ⬜ — Two attackers debate: one writes a probe, the other plays target and predicts refusal, first revises. Output: probes pre-tested for likely success, stored in corpus. |
 
-### 5.4 LLM-chatbot attack surface ⬜
+### 5.4 LLM-chatbot attack surface 🚧
 
 These are LLM-specific attacks that *use* the production-chatbot protocol
 (Socket.IO foundation) as a delivery vehicle. Every item targets the
 **model's behavior or the conversation's integrity** — not the chatbot's
 generic web-app surface (which is a different tool's job).
 
-| Item | LLM-specific framing |
+| Item | Status |
 |---|---|
-| **Session-lifecycle prompt injection** | Mutate `subFlow` / `flow` payload fields to coerce the model into a different system-prompt context (e.g. swap `"subFlow": "ptpayhome"` → `"admin_debug"`). Tests whether the LLM trusts client-supplied routing claims. |
-| **JWT-claim context injection** | Forge user-context claims (`tier=premium`, `is_staff=true`) the model receives via system prompt. Tests whether the LLM grants different capabilities based on unverified claims. |
-| **Channel-inconsistency policy bypass** | Same prompt over HTTP vs WS vs Socket.IO — does the *model's* refusal behavior differ when the wrapper differs? Tests guardrail uniformity. |
-| **Conversation hijack → memory extraction** | Replay/guess `sessionId` to inherit another user's conversation, then prompt the model to summarize "our previous discussion." Tests cross-session leakage of conversation memory. |
-| **Cost-amplification prompts** | Prompts that maximize the model's token output / context fill / recursive tool calls. DoS-by-token-bill — an LLM-native attack class. |
-| **Multi-turn refusal fatigue** | Long conversations that gradually erode the model's refusal posture via context window pressure. |
-| **Tool-result poisoning at the protocol level** | When the chatbot's protocol exposes tool-call frames (e.g. Socket.IO `tool_call` events), inject malicious "tool results" that reach the LLM as trusted context. |
+| **Session-lifecycle prompt injection** | ✅ — `chatbot_attacks/session_lifecycle.py`. `SessionLifecycleAttack` mutates routing fields (`subFlow`, `flow`, `role`, etc.) under a payload-template lock, diffs the response grade vs baseline, severity-classifies the change. CLI: `--chatbot-attack session-lifecycle`. |
+| **Channel-inconsistency policy bypass** | ✅ — `chatbot_attacks/channel_inconsistency.py`. `ChannelInconsistencyAttack` sends identical prompts across N adapters in parallel and flags grade divergence. Critical severity when refused channel + compliant channel both exist. CLI: `--chatbot-attack channel-inconsistency --channel-config foo.json --channel-config bar.json`. |
+| **JWT-claim context injection** | ⬜ — Forge user-context claims (`tier=premium`, `is_staff=true`) the model receives via system prompt. Pluggable JWT mutator. Needs target-config option to declare which claim → which downstream behavior. |
+| **Conversation hijack → memory extraction** | ⬜ — Replay/guess `sessionId` to inherit another user's conversation, then prompt the model to summarize "our previous discussion." Needs sessionId enumeration strategies + benign baseline session. |
+| **Cost-amplification prompts** | ⬜ — Prompts that maximize the model's token output / context fill / recursive tool calls. Measure response length × model price as "DoS-by-bill." |
+| **Multi-turn refusal fatigue** | ⬜ — Long conversations that gradually erode the model's refusal posture via context window pressure. Reuses MultiTurnRunner. |
+| **Tool-result poisoning at the protocol level** | ⬜ — When the chatbot's protocol exposes tool-call frames (e.g. Socket.IO `tool_call` events), inject malicious "tool results" that reach the LLM as trusted context. |
 
 ### 5.5 Engagement-grade reporting ⬜
 
