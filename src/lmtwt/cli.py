@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from .attacks.async_engine import AsyncAttackEngine, AttackResult
 from .attacks.async_probe import AsyncProbeAttack
+from .attacks.catalog_probe import AsyncCatalogProbe
 from .attacks.flows import (
     BUILT_IN_FLOWS,
     MultiTurnRunner,
@@ -31,6 +32,7 @@ from .attacks.tools import (
     list_vectors,
 )
 from .models.async_factory import async_get_model
+from .probes import load_corpus
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
 from .utils.config import load_config, load_target_config
 from .utils.logger import console, setup_logger
@@ -133,6 +135,21 @@ def parse_args() -> argparse.Namespace:
                    choices=["dan", "injection", "xss", "glitch", "misleading",
                             "malware", "forbidden_knowledge", "snowball", "all"])
     p.add_argument("--probe-iterations", type=int, default=5)
+    # LMTWT-native probe catalog (Phase 5.1)
+    p.add_argument("--probe-catalog", action="store_true",
+                   help="Run the LMTWT-native YAML probe corpus instead of "
+                        "the legacy --probe-mode categories")
+    p.add_argument("--probe-catalog-path", type=str, default=None,
+                   help="Alternate directory of probe YAML files "
+                        "(default: built-in library)")
+    p.add_argument("--probe-coordinate", type=str, default=None,
+                   help="Filter probes by taxonomy coordinate, e.g. "
+                        "'leak/*/*/*' or 'injection/direct/*/*'")
+    p.add_argument("--probe-severity", type=str, default=None,
+                   help="Comma-separated severity filter: "
+                        "critical,high,medium,low")
+    p.add_argument("--list-probes", action="store_true",
+                   help="List every probe in the corpus and exit")
     return p.parse_args()
 
 
@@ -157,6 +174,25 @@ def list_vectors_and_exit() -> None:
     print("-------------------------------------")
     for v in list_vectors():
         print(f"{v['name']}: {v['description']}")
+    print()
+
+
+def list_probes_and_exit(args) -> None:
+    severity_filter = (
+        [s.strip() for s in args.probe_severity.split(",")]
+        if args.probe_severity else None
+    )
+    corpus = load_corpus(
+        root=args.probe_catalog_path,
+        coordinate_filter=args.probe_coordinate,
+        severity_filter=severity_filter,
+    )
+    print(f"\nLMTWT probe corpus — {len(corpus)} probes:")
+    print("-" * 70)
+    for p in corpus:
+        owasp = ",".join(p.owasp_llm) or "-"
+        print(f"{p.severity:8}  {p.coordinate:50}  {p.id}")
+        print(f"          {p.name}  [OWASP: {owasp}]")
     print()
 
 
@@ -447,6 +483,75 @@ async def _run_probe(args, target_model) -> None:
         )
 
 
+async def _run_probe_catalog(args, target_model) -> None:
+    console.print("\n[bold red]🔥 PROBE CATALOG (LMTWT-native corpus)[/bold red]")
+
+    severity_filter = (
+        [s.strip() for s in args.probe_severity.split(",")]
+        if args.probe_severity else None
+    )
+    corpus = load_corpus(
+        root=args.probe_catalog_path,
+        coordinate_filter=args.probe_coordinate,
+        severity_filter=severity_filter,
+    )
+    if not corpus:
+        console.print("[yellow]No probes matched the filter; nothing to run.[/yellow]")
+        return
+
+    console.print(
+        f"Loaded [bold]{len(corpus)}[/bold] probes "
+        f"(filter={args.probe_coordinate or '*'}, "
+        f"severity={args.probe_severity or 'any'})\n"
+    )
+
+    runner = AsyncCatalogProbe(
+        target_model, probes=corpus, concurrency=args.concurrency
+    )
+    summary = await runner.run(target_system_prompt=args.system_prompt)
+
+    console.print(
+        f"[bold]Ran {summary.executed}/{summary.total} probes[/bold] "
+        f"(skipped {summary.skipped}, errors {summary.errors})"
+    )
+    console.print(
+        f"[bold green]Successful attacks: {summary.successes}/{summary.executed}[/bold green]\n"
+    )
+
+    console.print("[bold]By severity:[/bold]")
+    for sev in ("critical", "high", "medium", "low"):
+        b = summary.by_severity.get(sev)
+        if b:
+            console.print(
+                f"  {sev:9}  {b['successes']}/{b['total']} hit"
+            )
+
+    console.print("\n[bold]By taxonomy coordinate:[/bold]")
+    for coord, b in sorted(summary.by_coordinate.items()):
+        console.print(f"  {coord:55} {b['successes']}/{b['total']} hit")
+
+    console.print("\n[bold]Per-probe outcomes:[/bold]")
+    for o in summary.outcomes:
+        mark = "[green]✓[/green]" if o.get("success") else "[dim]·[/dim]"
+        if o.get("skipped_reason"):
+            mark = "[yellow]~[/yellow]"
+        console.print(
+            f"  {mark} [{o['severity']:8}] {o['probe_id']:55} "
+            f"{o.get('reason') or ''}"
+        )
+
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "probe-catalog",
+        "total_probes": summary.total,
+        "executed": summary.executed,
+        "successes": summary.successes,
+        "by_severity": summary.by_severity,
+        "by_coordinate": summary.by_coordinate,
+    }
+    ReportGenerator().generate_report(summary.outcomes, metadata)
+
+
 async def async_main() -> None:
     load_dotenv()
     args = parse_args()
@@ -459,6 +564,9 @@ async def async_main() -> None:
         return
     if args.list_vectors:
         list_vectors_and_exit()
+        return
+    if args.list_probes:
+        list_probes_and_exit(args)
         return
 
     config = load_config(args.config)
@@ -506,6 +614,10 @@ async def async_main() -> None:
         api_config=target_api_config,
         **_transport_kwargs(args),
     )
+
+    if args.probe_catalog:
+        await _run_probe_catalog(args, target_model)
+        return
 
     if args.probe_mode:
         await _run_probe(args, target_model)

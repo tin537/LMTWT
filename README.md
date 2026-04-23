@@ -6,11 +6,18 @@
   <img src="https://img.shields.io/badge/Contributions-Welcome-brightgreen" alt="Contributions: Welcome">
 </p>
 
-LMTWT is an async-first security testing framework for evaluating LLM resistance
-to prompt injection, jailbreaks, and tool-use attacks. It pits one model
-(the **attacker**) against another (the **target**) and reports whether the
-target was compromised — automatically, at scale, against frontier APIs or
-custom backends behind your own protocol.
+LMTWT is an async-first security testing framework for evaluating **LLM
+resistance** to prompt injection, jailbreaks, and tool-use attacks. It pits
+one model (the **attacker**) against another (the **target**) and reports
+whether the target was compromised — automatically, at scale, against
+frontier APIs or custom backends behind your own protocol.
+
+> **Scope: LLM-only.** LMTWT attacks the model's behavior, training, context,
+> tools, and conversation memory. It is **not** a general web/network/API
+> pentester — for SQLi, XSS, IDOR, port scanning, OAuth flows, and the rest
+> of the OWASP Top 10, use Burp / ZAP / nuclei / nmap. LMTWT speaks
+> production chatbot protocols (Socket.IO, custom WS, JWT-auth) only because
+> that's how you reach the LLM behind them.
 
 ## What you can hit
 
