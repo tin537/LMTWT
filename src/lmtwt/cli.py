@@ -54,10 +54,10 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--attacker", "-a", type=str, default="gemini",
                    choices=["gemini", "openai", "anthropic", "huggingface",
-                            "lmstudio"])
+                            "lmstudio", "claude-code", "acp"])
     p.add_argument("--target", "-t", type=str, default="openai",
                    choices=["gemini", "openai", "anthropic", "external-api",
-                            "huggingface", "lmstudio"])
+                            "huggingface", "lmstudio", "claude-code", "acp"])
     p.add_argument("--attacker-model", type=str)
     p.add_argument("--target-model", type=str)
     p.add_argument("--mode", "-m", type=str, default="interactive",

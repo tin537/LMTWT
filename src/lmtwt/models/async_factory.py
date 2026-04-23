@@ -91,6 +91,16 @@ def async_get_model(
             kwargs["model_name"] = model_name
         return cls(**kwargs)
 
+    if p in ("claude-code", "acp"):
+        # Generic ACP-over-stdio agent. Defaults assume the ``claude`` CLI is
+        # on PATH; override via CLAUDE_CODE_PATH / CLAUDE_CODE_ARGS env vars.
+        from .async_acp import AsyncACPModel
+
+        kwargs = {}
+        if model_name:
+            kwargs["model_name"] = model_name
+        return AsyncACPModel(**kwargs)
+
     if p == "huggingface":
         # Imported here so torch/transformers stay optional at install time.
         from .async_huggingface import AsyncHuggingFaceModel
