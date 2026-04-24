@@ -80,6 +80,40 @@ LM Studio and Claude Code (ACP) need no key — they run locally.
 
 ## Quick start
 
+The fastest way to use LMTWT is the `scan` subcommand — one command, full
+vulnerability sweep, complete engagement bundle out:
+
+```bash
+# Full scan: fingerprint → catalog → adaptive → climb → pollinate → chatbot attacks
+lmtwt scan --target openai --attacker gemini
+
+# Preview the plan without firing
+lmtwt scan --target openai --dry-run
+
+# Quick scan (catalog + fingerprint only, ~2 min)
+lmtwt scan --target openai --depth quick
+
+# Thorough scan (above + self-play + N=10 repeats, ~hours)
+lmtwt scan --target openai --depth thorough
+
+# Custom backend behind your own protocol
+lmtwt scan --target external-api --target-config examples/custom_api_target.json
+```
+
+The bundle lands in `./scan-<date>-<target>/`:
+
+```
+scan.json    report.md    report.html    report.pdf    scorecard.md
+fingerprint.json    plan.json    scan.db    repro/F00N_<id>.json
+```
+
+You hand the folder to a client and they have everything: human-readable
+report, machine-readable JSON, per-finding repro packs, and a queryable
+SQLite db.
+
+For granular control (run only one technique, tune individual knobs), the
+legacy flat CLI still works:
+
 ```bash
 # Interactive: Gemini attacking OpenAI
 ./run.sh --attacker gemini --target openai --mode interactive
@@ -89,8 +123,16 @@ LM Studio and Claude Code (ACP) need no key — they run locally.
          --target lmstudio  --target-model "llama-3.1-8b" \
          --mode interactive
 
-# Web UI
+# Web UI (Gradio)
 ./run.sh --web
+
+# Web UI (FastAPI + SSE — pip install -e '.[api]')
+lmtwt --web-api
+
+# Custom OpenAI-compatible attacker (Ollama, vLLM, LiteLLM, self-hosted gateway)
+export OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
+export OPENAI_COMPAT_MODEL=qwen2.5:7b
+lmtwt scan --target openai --attacker openai-compat
 ```
 
 ## Usage examples

@@ -3,6 +3,39 @@
 Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial,
 ⬜ = future work.
 
+## Phase 6 — `lmtwt scan` front door ✅
+
+The granular CLI grew to 30+ flags. The new front door collapses it to one
+command for the common case:
+
+```
+lmtwt scan --target <provider> --attacker <provider> [--target-config x.json]
+```
+
+Composes every existing technique automatically (fingerprint → catalog →
+adaptive → climb → pollinate → chatbot attacks), capability-detects which
+chatbot-protocol attacks apply from the target-config, and writes a complete
+engagement bundle to `./scan-<date>-<target>/`:
+
+```
+scan.json   report.md   report.html   report.pdf   scorecard.md
+fingerprint.json   plan.json   scan.db   repro/F00N_<id>.json   repro/index.json
+```
+
+Three depth presets — `quick` / `standard` / `thorough`. Defaults are
+opinionated (concurrency 4, repeats 3, ensemble grader, dashboard if TTY,
+persistence always on). `--dry-run` prints the plan without firing.
+
+The legacy flat CLI (`--probe-catalog`, `--climb`, `--self-play`, `--pollinate`,
+`--chatbot-attack`, etc.) keeps working untouched for power users. New top-level
+subcommand routing is in `cli.py` (detects `argv[1] == "scan"`).
+
+Files:
+- `src/lmtwt/scan/plan.py` — `build_scan_plan(depth, target_config)`
+- `src/lmtwt/scan/orchestrator.py` — `run_scan(...)` step pipeline
+- `src/lmtwt/scan/bundle.py` — engagement bundle writer
+
+
 ## Phase 1 — Foundation hygiene ✅
 
 | Item | Status |
@@ -17,7 +50,7 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 | Remove duplicate package roots (`lmtwt/`, `src/tests/`) | ✅ |
 | Docs scaffolding under `/docs` | ✅ |
 | OpenAI / Gemini default model bumps | ⬜ — by design; user sets via `config.json` |
-| `mypy` / `pyright` baseline | ⬜ — too much existing drift; future PR |
+| `mypy` / `pyright` baseline | ✅ — `pyrightconfig.json` at the repo root; `basic` strictness over `src/lmtwt/` only; legacy paths (`utils/report_generator.py`, `attacks/templates.py`) explicitly ignored; third-party SDK lines (gemini, openai, huggingface) get targeted `# type: ignore` for stub bugs. Now **0 errors / 16 advisory warnings**. CI gate added to `.github/workflows/python-tests.yml` — `uv run --with pyright pyright`. |
 
 ## Phase 2 — Core capability upgrade ✅
 
@@ -37,7 +70,7 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 ### `AttackRunner` ✅
 - ✅ `AsyncAttackEngine.batch(...)` with `concurrency=N`
   semaphore-bounded fan-out
-- ⬜ SQLite persistence so reports survive crashes — future polish
+- ✅ SQLite persistence so reports survive crashes — `src/lmtwt/persistence.py` `SQLiteObserver` streams `runs`/`outcomes` rows via the `CatalogObserver` hook; `list_runs` / `load_run_outcomes` reconstruct a `--report-from`-compatible payload. CLI: `--persist`, `--persist-db`, `--list-runs`, `--show-run <id>`. WAL mode + `asyncio.to_thread` writes — no event-loop blocking.
 
 ### Universal endpoint adapter ✅
 - ✅ Split into `BaseExternalModel` + `HTTPExternalModel` /
@@ -66,7 +99,7 @@ Status as of the most recent commit. ✅ = shipped, 🚧 = in progress / partial
 | **PAIR / TAP automated jailbreaking** | ✅ — `PAIRStrategy` + `TAPStrategy` + `ScoringLLMJudge` |
 | **Judge as a standalone component** | ✅ — `AsyncJudge` Protocol + `RegexJudge` / `LLMJudge` / `EnsembleJudge` / `ScoringLLMJudge` |
 | **Tool-use attacks + `ToolHarness`** | ✅ — `ToolUseAttack` + `InjectionVector` (web_search / document / tool_output) — indirect prompt injection via fake tool outputs |
-| **Replace Gradio with FastAPI + SSE frontend** | ⬜ — optional; current Gradio UI is async + streaming and works |
+| **Replace Gradio with FastAPI + SSE frontend** | ✅ (MVP, parallel — Gradio still works) — `src/lmtwt/web_api/`. FastAPI app with single-page UI for the probe-catalog runner; live SSE stream of outcomes per run; reuses `SQLiteObserver` for durability + `BroadcastObserver` for fan-out (multiple browsers per run). Endpoints: `GET /api/probes`, `GET/POST /api/runs`, `GET /api/runs/{id}/events` (SSE). CLI: `--web-api --web-api-port N --web-api-host H`. Install: `pip install lmtwt[api]`. |
 
 ## Additional providers
 
@@ -112,7 +145,7 @@ engagement, not a dependency on third-party academic benchmarks.
 | **Catalog runner + CLI** | ✅ — `AsyncCatalogProbe` with per-probe regex judge (refusal wins over success); `--probe-catalog`, `--probe-coordinate`, `--probe-severity`, `--list-probes` |
 | **First-party probe corpus (200+)** | 🚧 — **8 seed probes shipped** covering all 4 vectors and all 4 obfuscation values; corpus needs to grow to 200+. Target chatbots: Socket.IO, fintech IVR, customer-service — not research models. |
 
-### 5.2 Own scoring rubric 🚧
+### 5.2 Own scoring rubric ✅
 
 | Item | Status |
 |---|---|
@@ -120,10 +153,10 @@ engagement, not a dependency on third-party academic benchmarks.
 | **Compound severity** | ✅ — `compound_lss([...])` boosts max-of-chain by 1.30 (clamped to 10), flips vector to `C:Y`. |
 | **Refusal-quality grading** | ✅ — `grade_refusal()` returns A/B/C/D/F. Catalog runner attaches grade to every outcome (even failures), CLI surfaces histogram. |
 | **CLI integration** | ✅ — `--probe-catalog` output now shows `LSS=X.XX  refusal=A` per probe + `Max LSS` + by-grade histogram. |
-| **Confidence intervals** | ⬜ — run probes N times, report verdict variance. Next sub-landing in 5.2. |
-| **LLM-backed refusal grader** | ⬜ — current grader is regex-only; an LLM second-opinion grader is future work. |
+| **Confidence intervals** | ✅ — `AsyncCatalogProbe(repeats=N)` runs each probe N times; outcome dict carries `attempts`, `successes_observed`, `success_rate`, `ci_low`, `ci_high` (Wilson 95% CI), and a `grade_distribution` histogram. CLI: `--probe-repeat N` (default 1, additive — N=1 keeps the original outcome shape). |
+| **LLM-backed refusal grader** | ✅ — `src/lmtwt/scoring/refusal_grade.py`. New `RefusalGrader` Protocol + 3 impls: `RegexRefusalGrader` (default), `LLMRefusalGrader` (asks an attacker-side model for `GRADE: A-F` with regex fallback on malformed output), `EnsembleRefusalGrader` (regex first, only escalates to LLM on regex `F` — the case where regex is most likely wrong). Catalog runner accepts a custom grader via constructor. CLI: `--refusal-grader {regex,llm,ensemble} --refusal-grader-provider {gemini,openai,anthropic}`. |
 
-### 5.3 Discovery engine 🚧
+### 5.3 Discovery engine ✅
 
 This is where LMTWT goes beyond running probes — it **generates new attacks
 during a run** and the corpus grows itself.
@@ -132,9 +165,9 @@ during a run** and the corpus grows itself.
 |---|---|
 | **Refusal fingerprinting** | ✅ — `src/lmtwt/discovery/fingerprint.py`; 9-probe calibration set (4 refusal-trigger × 4 obfuscation axes + 1 multilingual trigger + 4 stress probes), per-axis refusal rates, weak-axis identification, refusal-style classifier (`hard` / `soft` / `leaky` / `none`), policy-leak detection, response timing/length stats. CLI: `--fingerprint --fingerprint-out target.json`. |
 | **Adaptive attacker** | ✅ — `src/lmtwt/discovery/adaptive.py`; `AdaptiveAttacker` reads the fingerprint, picks the weak obfuscation axis, asks the attacker LLM for N fresh probes targeting that gap, returns `Probe`-shaped objects that flow through the existing catalog runner. CLI: `--probe-catalog --adaptive --fingerprint-in target.json`. |
-| **LMTWT-Climb mutation engine** | ⬜ — Take an almost-successful probe and mutate (synonyms, restructure, persona, distractors). Hill-climb against the judge. Our own search loop, not PAIR/TAP. |
-| **Cross-pollination** | ⬜ — Probe A succeeds against bot X → auto-generate variants for bots Y / Z. Feedback loop fills the corpus. |
-| **Self-play probe generation** | ⬜ — Two attackers debate: one writes a probe, the other plays target and predicts refusal, first revises. Output: probes pre-tested for likely success, stored in corpus. |
+| **LMTWT-Climb mutation engine** | ✅ — `src/lmtwt/discovery/climb.py`. `LMTWTClimb` hill-climbs a seed probe through 6 typed mutators (`SynonymMutator`, `RestructureMutator`, `PersonaMutator`, `DistractorMutator`, `EncodingMutator`, `TranslationMutator`). Fitness = `grade_refusal()` (A=0..F=4) by default, or a `ScoringJudge` 1-10 score (`--climb-judge`). Stops on success / plateau (configurable Δ over N rounds) / max-rounds. Each child probe carries `metadata.climb` lineage (parent_id, operator, generation, root_seed). CLI: `--climb --climb-seed <probe-id-or-yaml> --climb-rounds N --climb-fanout K --climb-keep K --climb-out result.json --climb-save best.yaml`. |
+| **Cross-pollination** | ✅ — `src/lmtwt/discovery/pollinate.py`. `CrossPollinator.plan(seed)` derives the **taxonomy slots adjacent to the seed** (one per non-default obfuscation/delivery value the seed doesn't already cover); `pollinate()` fires one operator per slot. Six operators: 4 mechanical (`encode-base64`, `multi-turn-split`, `rag-wrap`, `indirect-frame`) + 2 LLM-driven (`translate-zh`, `persona-wrap`). Bigram-Jaccard dedupe (default 30% threshold) drops near-identical variants vs seed and pairwise. Each variant carries `metadata.cross_pollinated` lineage (seed_id, operator, axis-change, engagement). CLI: `--pollinate --pollinate-seed <id-or-yaml> [--pollinate-out file.yaml --pollinate-save-dir ./library/ --pollinate-engagement <tag> --pollinate-skip-op <name>]`. |
+| **Self-play probe generation** | ✅ — `src/lmtwt/discovery/self_play.py`. `SelfPlay` runs a generator-vs-critic loop with **no live target**: generator drafts a probe at a (vector, obfuscation, target_effect) coordinate, critic predicts refusal text + 0-10 confidence, generator revises if confidence above threshold (default 6) for up to N rounds, then accept/reject. Critic's predicted refusal is harvested into the probe's `refusal_indicators` (free ground-truth indicators). Bigram-Jaccard diversity filter (reused from pollinate) drops near-duplicates within a coordinate. Sweeps all 64 coordinates by default; `--self-play-coordinate` restricts. Each accepted probe carries `metadata.self_play` lineage (generator/critic model names, critic confidence, predicted refusal, rounds, generated_at). CLI: `--self-play [--self-play-coordinate v/o/e]... --self-play-n N --self-play-rounds K --self-play-threshold T --self-play-out <dir> --self-play-trace <file.json> --self-play-critic <provider>`. |
 
 ### 5.4 LLM-chatbot attack surface ✅
 
@@ -153,7 +186,7 @@ generic web-app surface (which is a different tool's job).
 | **Multi-turn refusal fatigue** | ✅ — `chatbot_attacks/refusal_fatigue.py`. 3 built-in scripts (research-framing, incremental-roleplay, conditional-acceptance). Grades every turn; flags critical when initial A/B → mid-script F. |
 | **Tool-result poisoning at the protocol level** | ✅ — `chatbot_attacks/tool_result_poisoning.py`. 3 default payloads (auth-uplift, balance-injection, instruction-injection-via-tool). Frames poisoned content as a tool reply in conversation, then asks an extraction question; per-payload swallow heuristics decide critical/high/low. |
 
-### 5.5 Engagement-grade reporting 🚧
+### 5.5 Engagement-grade reporting 🚧 (most items shipped)
 
 | Item | Status |
 |---|---|
@@ -161,10 +194,10 @@ generic web-app surface (which is a different tool's job).
 | **HTML renderer** | ✅ — Standalone HTML with embedded print-friendly CSS, target-response escape, no external Markdown dep. |
 | **PDF generator** | ✅ — `render_pdf()` via WeasyPrint (optional `lmtwt[report]` extra). Falls back gracefully to MD/HTML when WeasyPrint isn't installed. |
 | **CLI integration** | ✅ — `--report-from <run.json> --report-out <basename> --report-format md,html,pdf`. |
-| **Reproduction packs** | ⬜ — Each finding ships with a self-contained `repro.json`: minimal target-config + exact prompt + expected response pattern. Client engineers can re-run independently. |
-| **Before / after diff mode** | ⬜ — Re-run the same battery post-patch → "12 of 15 remediated. 1 regressed. 2 new." |
-| **Live TUI dashboard** | ⬜ — Real-time probe grid, hit rate, severity distribution during a scan. |
-| **Multi-target scorecard** | ⬜ — Same battery against multiple bots → side-by-side grid for procurement / vendor evaluation. |
+| **Reproduction packs** | ✅ — `src/lmtwt/reporting/repro.py`. `write_repro_pack()` emits one `F00N_<id>.json` per finding plus an `index.json`, sorted by LSS desc. Each pack is versioned (`lmtwt_repro_pack_version`) and bundles target stub + exact prompt (or full conversation for multi-turn) + success/refusal indicators + observed-response excerpt + previous outcome. CLI: `--repro-out <dir>` alongside `--report-from`. |
+| **Before / after diff mode** | ✅ — `src/lmtwt/reporting/diff.py`. `build_diff_report(before, after)` matches findings by probe id (preferred) or `(coordinate, sha1(prompt))` fallback, then bucketizes into **remediated / regressed / persistent / new** with severity Δ, LSS Δ, and grade transitions. Markdown renderer leads with regressions. CLI: `--diff-before <run.json> --diff-after <run.json>` + `--report-out`/`--report-format` (md, json). |
+| **Live TUI dashboard** | ✅ — `src/lmtwt/cli_dashboard.py`. `RichDashboardObserver` renders status header (target / progress / in-flight / elapsed / max LSS), severity histogram of successful hits, and a scrolling tail of recent outcomes via Rich `Live`. Plugged in via the new `CatalogObserver` Protocol — runner is unaware of Rich; non-TTY runs leave the flag off. CLI: `--dashboard`. |
+| **Multi-target scorecard** | ✅ — `src/lmtwt/reporting/scorecard.py`. `build_scorecard(payloads, names)` unions findings across N targets via the same `_match_key` strategy diff mode uses (probe id preferred, `(coord, sha1(prompt))` fallback). Grid sorted by max-LSS desc with hit-count tiebreak; per-target summary row (max LSS, real-findings count, severity histogram); headline picks most/least exposed target. CLI: `--scorecard-from <run.json>` (repeatable, one per target) `--scorecard-name <label>` (optional, paired by position) + `--report-out`/`--report-format` (md, json). |
 
 ### 5.6 What we're explicitly NOT doing
 
@@ -214,10 +247,21 @@ it does not.
 
 ## Test coverage
 
-150+ tests passing (was 11 at the start). Per-area breakdown:
+385+ tests passing (was 11 at the start). Per-area breakdown:
 
 | Area | Tests |
 |---|---|
+| LMTWT-Climb (mutators + orchestrator) | 18 |
+| Diff mode (before/after bucketing) | 12 |
+| Cross-pollination (plan + ops + dedupe) | 21 |
+| Multi-target scorecard | 17 |
+| Self-play probe generation | 17 |
+| Confidence intervals (Wilson CI + repeats) | 5 |
+| LLM-backed refusal grader (regex/llm/ensemble) | 9 |
+| TUI dashboard (observer protocol + Rich render) | 7 |
+| SQLite persistence (observer + read API) | 9 |
+| FastAPI web API (broadcast + endpoints + UI) | 12 |
+| Scan front door (plan + orchestrator + bundle) | 18 |
 | Conversation value object | 7 |
 | Anthropic provider (incl. cache) | 8 |
 | OpenAI provider | 4 |
