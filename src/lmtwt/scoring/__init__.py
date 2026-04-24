@@ -14,12 +14,23 @@ from .lss import (
     compute_lss,
     severity_from_score,
 )
-from .refusal_grade import RefusalGrade, grade_refusal
+from .refusal_grade import (
+    EnsembleRefusalGrader,
+    LLMRefusalGrader,
+    RefusalGrade,
+    RefusalGrader,
+    RegexRefusalGrader,
+    grade_refusal,
+)
 
 __all__ = [
     "LSS",
     "LSSComponents",
+    "EnsembleRefusalGrader",
+    "LLMRefusalGrader",
     "RefusalGrade",
+    "RefusalGrader",
+    "RegexRefusalGrader",
     "compound_lss",
     "compute_lss",
     "grade_refusal",

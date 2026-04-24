@@ -15,26 +15,38 @@ Design notes:
 - Multi-turn probes (``metadata.requires_flow_runner``) are skipped with an
   informative message — they'll be handled by a dedicated runner in a later
   landing.
+- ``repeats > 1`` runs each probe multiple times and reports a Wilson 95%
+  CI on the success rate. Useful at non-zero target temperature, where
+  one-shot success/failure is a coin flip and a pentest report shouldn't
+  promote either outcome to a finding without supporting statistics.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime
+import math
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from ..models.async_base import AsyncAIModel
 from ..models.conversation import Conversation
 from ..probes.schema import Probe
-from ..scoring import LSS, RefusalGrade, compute_lss, grade_refusal
+from ..scoring import (
+    LSS,
+    RefusalGrade,
+    RefusalGrader,
+    RegexRefusalGrader,
+    compute_lss,
+    grade_refusal,
+)
 from .async_engine import DEFAULT_TARGET_SYSTEM_PROMPT, AttackResult
 
 
 @dataclass
 class ProbeOutcome:
-    """Single execution of a single probe."""
+    """Single execution of a single probe (or aggregate of N executions)."""
 
     probe_id: str
     coordinate: str
@@ -44,6 +56,29 @@ class ProbeOutcome:
     lss: LSS | None = None
     refusal_grade: RefusalGrade | None = None
     skipped_reason: str | None = None
+    # Confidence-interval fields (only populated when repeats > 1)
+    attempts: int = 1
+    successes_observed: int = 1
+    success_rate: float | None = None
+    ci_low: float | None = None
+    ci_high: float | None = None
+    grade_distribution: dict[str, int] = field(default_factory=dict)
+
+
+@runtime_checkable
+class CatalogObserver(Protocol):
+    """Optional callbacks fired by ``AsyncCatalogProbe`` during a run.
+
+    All methods are async to keep the runner's hot loop simple. The runner
+    awaits each callback in turn — observers should be cheap (TUI updates,
+    in-memory accumulation) and never block on network IO. Spawn a task
+    if you need to fan out side-effects.
+    """
+
+    async def on_run_started(self, total: int) -> None: ...
+    async def on_probe_started(self, probe: Probe) -> None: ...
+    async def on_probe_completed(self, outcome: "ProbeOutcome") -> None: ...
+    async def on_run_finished(self, summary: "CatalogSummary") -> None: ...
 
 
 @dataclass
@@ -75,10 +110,16 @@ class AsyncCatalogProbe:
         probes: list[Probe],
         *,
         concurrency: int = 1,
+        repeats: int = 1,
+        refusal_grader: RefusalGrader | None = None,
+        observers: list[CatalogObserver] | None = None,
     ) -> None:
         self.target = target
         self.probes = probes
         self.concurrency = max(1, concurrency)
+        self.repeats = max(1, repeats)
+        self.refusal_grader: RefusalGrader = refusal_grader or RegexRefusalGrader()
+        self.observers: list[CatalogObserver] = list(observers or [])
 
     async def run(
         self,
@@ -87,10 +128,29 @@ class AsyncCatalogProbe:
     ) -> CatalogSummary:
         sem = asyncio.Semaphore(self.concurrency)
         system = target_system_prompt or DEFAULT_TARGET_SYSTEM_PROMPT
+        await self._notify("on_run_started", len(self.probes))
+
+        async def _attempt(probe: Probe) -> tuple[bool, str, str, RefusalGrade | None,
+                                                   str | None]:
+            """One target call. Returns (success, reason, response, grade, error)."""
+            conv = (
+                Conversation().with_system(system).append("user", probe.prompt)
+            )
+            async with sem:
+                try:
+                    resp = await self.target.chat(conv)
+                except Exception as e:  # noqa: BLE001
+                    return False, f"target error: {e}", "", None, str(e)
+            success, reason = _judge(probe, resp.content)
+            grade = await self.refusal_grader.grade(
+                resp.content, attack_prompt=probe.prompt,
+            )
+            return success, reason, resp.content, grade, None
 
         async def _one(probe: Probe) -> ProbeOutcome:
+            await self._notify("on_probe_started", probe)
             if probe.metadata.get("requires_flow_runner"):
-                return ProbeOutcome(
+                outcome = ProbeOutcome(
                     probe_id=probe.id,
                     coordinate=probe.coordinate,
                     severity=probe.severity,
@@ -104,31 +164,36 @@ class AsyncCatalogProbe:
                     ),
                     skipped_reason="multi-turn probe requires flow runner",
                 )
+                await self._notify("on_probe_completed", outcome)
+                return outcome
 
-            conv = (
-                Conversation().with_system(system).append("user", probe.prompt)
+            attempts = await asyncio.gather(
+                *(_attempt(probe) for _ in range(self.repeats))
             )
-            async with sem:
-                try:
-                    resp = await self.target.chat(conv)
-                except Exception as e:  # noqa: BLE001
-                    return ProbeOutcome(
-                        probe_id=probe.id,
-                        coordinate=probe.coordinate,
-                        severity=probe.severity,
-                        owasp_llm=list(probe.owasp_llm),
-                        result=AttackResult(
-                            instruction=probe.id,
-                            attack_prompt=probe.prompt,
-                            target_response="",
-                            success=False,
-                            reason=f"target error: {e}",
-                            error=str(e),
-                        ),
-                    )
-            success, reason = _judge(probe, resp.content)
+            successes = [a for a in attempts if a[0]]
+            grades = [a[3] for a in attempts if a[3] is not None]
+            errors = [a[4] for a in attempts if a[4]]
+
+            # Pick a representative attempt for the per-outcome record:
+            # first successful run if any (so reports show what worked),
+            # else the first attempt overall.
+            rep = successes[0] if successes else attempts[0]
+            success, reason, response, grade, error = rep
+
+            n = len(attempts)
+            k = len(successes)
+            success_rate = k / n
+            ci_low, ci_high = _wilson_interval(k, n)
+            grade_dist: dict[str, int] = {}
+            for g in grades:
+                grade_dist[g] = grade_dist.get(g, 0) + 1
+
+            # Reasons summary when we ran more than one trial.
+            if n > 1:
+                reason = f"{reason}  [{k}/{n} succeeded]"
+
             chained = bool(probe.chain_with)
-            return ProbeOutcome(
+            outcome = ProbeOutcome(
                 probe_id=probe.id,
                 coordinate=probe.coordinate,
                 severity=probe.severity,
@@ -136,18 +201,39 @@ class AsyncCatalogProbe:
                 result=AttackResult(
                     instruction=probe.id,
                     attack_prompt=probe.prompt,
-                    target_response=resp.content,
-                    success=success,
+                    target_response=response,
+                    success=bool(successes),
                     reason=reason,
+                    error=errors[0] if errors and not successes else None,
                 ),
-                lss=compute_lss(probe, chained=chained) if success else None,
-                refusal_grade=grade_refusal(resp.content),
+                lss=compute_lss(probe, chained=chained) if successes else None,
+                refusal_grade=grade,
+                attempts=n,
+                successes_observed=k,
+                success_rate=success_rate,
+                ci_low=ci_low,
+                ci_high=ci_high,
+                grade_distribution=grade_dist,
             )
+            await self._notify("on_probe_completed", outcome)
+            return outcome
 
         outcomes: list[ProbeOutcome] = await asyncio.gather(
             *(_one(p) for p in self.probes)
         )
-        return _summarize(outcomes)
+        summary = _summarize(outcomes)
+        await self._notify("on_run_finished", summary)
+        return summary
+
+    async def _notify(self, method: str, *args) -> None:
+        for obs in self.observers:
+            handler = getattr(obs, method, None)
+            if handler is None:
+                continue
+            try:
+                await handler(*args)
+            except Exception:  # noqa: BLE001 — observer failure must not break the run
+                continue
 
 
 def _judge(probe: Probe, response: str) -> tuple[bool, str]:
@@ -226,4 +312,29 @@ def _outcome_to_dict(o: ProbeOutcome) -> dict[str, Any]:
         d["refusal_grade"] = o.refusal_grade
     if o.skipped_reason:
         d["skipped_reason"] = o.skipped_reason
+    # Always emit attempts so downstream tools can distinguish 1/1 from N/N.
+    d["attempts"] = o.attempts
+    d["successes_observed"] = o.successes_observed
+    if o.attempts > 1:
+        d["success_rate"] = o.success_rate
+        d["ci_low"] = o.ci_low
+        d["ci_high"] = o.ci_high
+        d["grade_distribution"] = dict(o.grade_distribution)
     return d
+
+
+def _wilson_interval(successes: int, attempts: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score 95% confidence interval for a binomial proportion.
+
+    Better than normal-approximation at small N and at extreme proportions
+    (0 or 1). z=1.96 → 95% CI. Returns (low, high) clamped to [0, 1].
+    """
+    if attempts <= 0:
+        return 0.0, 0.0
+    p = successes / attempts
+    denom = 1 + (z * z) / attempts
+    centre = (p + (z * z) / (2 * attempts)) / denom
+    half = (z * math.sqrt((p * (1 - p) + (z * z) / (4 * attempts)) / attempts)) / denom
+    low = max(0.0, centre - half)
+    high = min(1.0, centre + half)
+    return round(low, 4), round(high, 4)

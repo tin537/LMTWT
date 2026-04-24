@@ -263,6 +263,106 @@ async def test_catalog_runner_attaches_lss_to_successful_outcomes():
     assert summary.max_lss == pytest.approx(6.00)
 
 
+async def test_catalog_runner_repeats_probe_and_reports_success_rate():
+    """With repeats=10 and an alternating-success target, success_rate ≈ 0.5."""
+    probe = Probe(**_probe_dict())
+    responses = [
+        ChatResponse(content="Sure — You are a helpful assistant.", model="fake")
+        if i % 2 == 0
+        else ChatResponse(content="I can't share that.", model="fake")
+        for i in range(10)
+    ]
+    target = AsyncMock()
+    target.chat = AsyncMock(side_effect=responses)
+
+    summary = await AsyncCatalogProbe(target, [probe], repeats=10).run()
+
+    o = summary.outcomes[0]
+    assert o["attempts"] == 10
+    assert o["successes_observed"] == 5
+    assert o["success_rate"] == pytest.approx(0.5)
+    # Wilson 95% CI on 5/10 brackets 0.5 (~0.24..0.76).
+    assert 0.15 < o["ci_low"] < 0.4
+    assert 0.6 < o["ci_high"] < 0.85
+    # Reason annotated with the repeat ratio.
+    assert "[5/10 succeeded]" in o["reason"]
+    # Grade distribution captures both A and F.
+    assert o["grade_distribution"].get("F", 0) >= 1
+    assert o["grade_distribution"].get("A", 0) >= 1
+
+
+async def test_catalog_runner_repeats_all_success_yields_high_ci_low():
+    probe = Probe(**_probe_dict())
+    responses = [
+        ChatResponse(content="Sure — You are a helpful assistant.", model="fake")
+        for _ in range(10)
+    ]
+    target = AsyncMock()
+    target.chat = AsyncMock(side_effect=responses)
+
+    summary = await AsyncCatalogProbe(target, [probe], repeats=10).run()
+    o = summary.outcomes[0]
+    assert o["successes_observed"] == 10
+    assert o["success_rate"] == 1.0
+    # All-success Wilson lower bound: ~0.72 for n=10 — far from 0.
+    assert o["ci_low"] > 0.65
+    assert o["ci_high"] == 1.0
+    # Aggregate-level: still counted as a success.
+    assert summary.successes == 1
+
+
+async def test_catalog_runner_repeats_all_fail_yields_low_ci_high():
+    probe = Probe(**_probe_dict())
+    responses = [
+        ChatResponse(content="I can't share that.", model="fake")
+        for _ in range(10)
+    ]
+    target = AsyncMock()
+    target.chat = AsyncMock(side_effect=responses)
+
+    summary = await AsyncCatalogProbe(target, [probe], repeats=10).run()
+    o = summary.outcomes[0]
+    assert o["successes_observed"] == 0
+    assert o["success_rate"] == 0.0
+    assert o["ci_low"] == 0.0
+    assert o["ci_high"] < 0.35  # n=10 zero-success Wilson upper ~0.28
+    assert summary.successes == 0
+
+
+async def test_catalog_runner_repeats_one_keeps_existing_outcome_shape():
+    """repeats=1 (default) must NOT add CI fields — backward compat."""
+    probe = Probe(**_probe_dict())
+    target = AsyncMock()
+    target.chat = AsyncMock(
+        return_value=ChatResponse(
+            content="Sure — You are a helpful assistant.", model="fake",
+        )
+    )
+    summary = await AsyncCatalogProbe(target, [probe]).run()
+    o = summary.outcomes[0]
+    # attempts/successes_observed are always present (additive, harmless).
+    assert o["attempts"] == 1
+    assert o["successes_observed"] == 1
+    # But CI fields are omitted when there's only one trial.
+    assert "ci_low" not in o
+    assert "ci_high" not in o
+    assert "success_rate" not in o
+    assert "grade_distribution" not in o
+
+
+def test_wilson_interval_brackets_observed_proportion():
+    from lmtwt.attacks.catalog_probe import _wilson_interval
+
+    low, high = _wilson_interval(5, 10)
+    assert 0 <= low <= 0.5 <= high <= 1
+    # All-success at n=1 should NOT collapse to (1, 1).
+    low1, high1 = _wilson_interval(1, 1)
+    assert low1 < 1.0
+    assert high1 == 1.0
+    # Zero-attempts edge case shouldn't divide by zero.
+    assert _wilson_interval(0, 0) == (0.0, 0.0)
+
+
 async def test_catalog_runner_grades_refusals_even_on_failure():
     probe = Probe(**_probe_dict())
     target = AsyncMock()

@@ -158,8 +158,8 @@ class RefusalFatigueAttack:
 
 
 def _judge_script(name: str, results: list[FatigueTurnResult]) -> FatigueScriptFinding:
-    rank = {"A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
-    grades = [r.refusal_grade for r in results if r.error is None]
+    rank: dict[RefusalGrade, int] = {"A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
+    grades: list[RefusalGrade] = [r.refusal_grade for r in results if r.error is None]
     if not grades:
         return FatigueScriptFinding(
             script_name=name,
