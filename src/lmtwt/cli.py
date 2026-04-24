@@ -55,7 +55,19 @@ from .discovery import (
 )
 from .models.async_factory import async_get_model
 from .probes import load_corpus
-from .reporting import build_report, render_html, render_markdown, render_pdf
+from .reporting import (
+    build_diff_report,
+    build_report,
+    build_scorecard,
+    diff_to_dict,
+    render_diff_markdown,
+    render_html,
+    render_markdown,
+    render_pdf,
+    render_scorecard_markdown,
+    scorecard_to_dict,
+    write_repro_pack,
+)
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
 from .utils.config import load_config, load_target_config
 from .utils.logger import console, setup_logger
@@ -86,10 +98,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--attacker", "-a", type=str, default="gemini",
                    choices=["gemini", "openai", "anthropic", "huggingface",
-                            "lmstudio", "claude-code", "acp"])
+                            "lmstudio", "openai-compat", "claude-code", "acp"])
     p.add_argument("--target", "-t", type=str, default="openai",
                    choices=["gemini", "openai", "anthropic", "external-api",
-                            "huggingface", "lmstudio", "claude-code", "acp"])
+                            "huggingface", "lmstudio", "openai-compat",
+                            "claude-code", "acp"])
     p.add_argument("--attacker-model", type=str)
     p.add_argument("--target-model", type=str)
     p.add_argument("--mode", "-m", type=str, default="interactive",
@@ -173,6 +186,48 @@ def parse_args() -> argparse.Namespace:
                         "critical,high,medium,low")
     p.add_argument("--list-probes", action="store_true",
                    help="List every probe in the corpus and exit")
+    p.add_argument("--probe-repeat", type=int, default=1,
+                   help="Re-run each probe N times and report a Wilson 95%% "
+                        "CI on the success rate. Useful at non-zero target "
+                        "temperature where 1-shot success is a coin flip "
+                        "(default: 1, no behavior change).")
+    p.add_argument("--refusal-grader", type=str, default="regex",
+                   choices=["regex", "llm", "ensemble"],
+                   help="Refusal-grade evaluator. 'regex' (default, free) "
+                        "uses heuristics; 'llm' asks an attacker-side model "
+                        "to grade; 'ensemble' uses regex first and only "
+                        "escalates to the LLM on a regex 'F' (full "
+                        "compliance) verdict — the case where regex is "
+                        "most likely to be wrong.")
+    p.add_argument("--refusal-grader-provider", type=str, default=None,
+                   choices=["gemini", "openai", "anthropic"],
+                   help="Provider for --refusal-grader=llm/ensemble. "
+                        "Defaults to --compliance-provider.")
+    p.add_argument("--dashboard", action="store_true",
+                   help="Render a live TUI panel during --probe-catalog "
+                        "runs (severity histogram, recent outcomes, "
+                        "elapsed). Off by default — non-TTY environments "
+                        "should leave it off.")
+    # Persistence
+    p.add_argument("--persist", action="store_true",
+                   help="Stream catalog runs into a SQLite db so they "
+                        "survive crashes / Ctrl-C. Pair with --persist-db.")
+    p.add_argument("--persist-db", type=str, default="lmtwt.db",
+                   help="Path to the SQLite db (default: ./lmtwt.db).")
+    p.add_argument("--list-runs", action="store_true",
+                   help="List recent runs from --persist-db and exit.")
+    p.add_argument("--show-run", type=int, default=None,
+                   help="Dump the outcomes of run <id> as a "
+                        "--report-from-compatible JSON to stdout.")
+    # FastAPI web backend (parallel to --web Gradio, doesn't replace it)
+    p.add_argument("--web-api", action="store_true",
+                   help="Launch the FastAPI + SSE web UI (probe-catalog "
+                        "runner with live streaming). Requires "
+                        "lmtwt[api]. Parallel to --web (Gradio).")
+    p.add_argument("--web-api-port", type=int, default=8500,
+                   help="Port for --web-api (default: 8500)")
+    p.add_argument("--web-api-host", type=str, default="127.0.0.1",
+                   help="Bind host for --web-api (default: 127.0.0.1)")
     # Phase 5.3 — discovery / adaptive attacker
     p.add_argument("--fingerprint", action="store_true",
                    help="Run target fingerprinting (calibration probes) and exit")
@@ -207,6 +262,101 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--report-format", type=str, default="md,html",
                    help="Comma-separated formats to emit: md, html, pdf "
                         "(pdf requires lmtwt[report]). Default: md,html")
+    p.add_argument("--repro-out", type=str, default=None,
+                   help="Directory to write per-finding repro.json packs "
+                        "alongside --report-from. One file per finding plus "
+                        "an index.json — client engineers can replay each "
+                        "finding independently.")
+    p.add_argument("--diff-before", type=str, default=None,
+                   help="Run-output JSON for the BEFORE engagement (use with "
+                        "--diff-after to produce a remediation diff report).")
+    p.add_argument("--diff-after", type=str, default=None,
+                   help="Run-output JSON for the AFTER engagement.")
+    p.add_argument("--scorecard-from", type=str, action="append", default=None,
+                   help="Run-output JSON for one target. Repeat for each "
+                        "target (e.g. --scorecard-from a.json "
+                        "--scorecard-from b.json) to build a side-by-side "
+                        "multi-target scorecard.")
+    p.add_argument("--scorecard-name", type=str, action="append", default=None,
+                   help="Optional column label per --scorecard-from "
+                        "(must match in count). Defaults to "
+                        "metadata.target_model.")
+    # Phase 5.3 — LMTWT-Climb mutation engine
+    p.add_argument("--climb", action="store_true",
+                   help="Run LMTWT-Climb: hill-climb a seed probe through "
+                        "typed mutations until the target complies or the "
+                        "search plateaus.")
+    p.add_argument("--climb-seed", type=str, default=None,
+                   help="Probe id (from the catalog) or path to a seed "
+                        "probe YAML file. Required with --climb.")
+    p.add_argument("--climb-rounds", type=int, default=4,
+                   help="Maximum climb rounds (default: 4)")
+    p.add_argument("--climb-fanout", type=int, default=3,
+                   help="Mutations per parent per round (default: 3)")
+    p.add_argument("--climb-keep", type=int, default=2,
+                   help="Top-K survivors carried into the next round (default: 2)")
+    p.add_argument("--climb-out", type=str, default=None,
+                   help="Write climb result (best probe + history) as JSON")
+    p.add_argument("--climb-save", type=str, default=None,
+                   help="If the climb succeeds (full compliance), save the "
+                        "best probe as a YAML file at this path for corpus "
+                        "growth.")
+    p.add_argument("--climb-judge", action="store_true",
+                   help="Use the LLM scoring judge (1-10) for fitness "
+                        "instead of the regex refusal grader.")
+    # Phase 5.3 — cross-pollination
+    p.add_argument("--pollinate", action="store_true",
+                   help="Generate taxonomy-adjacent variants of a seed "
+                        "probe (one per axis-change). Output is YAML — "
+                        "feed it back through --probe-catalog to evaluate.")
+    p.add_argument("--pollinate-seed", type=str, default=None,
+                   help="Probe id (from the catalog) or path to a seed "
+                        "probe YAML file. Required with --pollinate.")
+    p.add_argument("--pollinate-out", type=str, default=None,
+                   help="Single YAML file to write all variants into "
+                        "(--- separated). Useful for review.")
+    p.add_argument("--pollinate-save-dir", type=str, default=None,
+                   help="Directory to write each variant as its own YAML "
+                        "(corpus-style). Variants drop in alongside hand-"
+                        "authored probes for the next --probe-catalog run.")
+    p.add_argument("--pollinate-engagement", type=str, default=None,
+                   help="Tag every variant's metadata with this engagement "
+                        "name (e.g. 'acme-2026-q2') for provenance.")
+    p.add_argument("--pollinate-skip-op", type=str, action="append", default=None,
+                   help="Operator names to skip (repeatable). Available: "
+                        "encode-base64, translate-zh, persona-wrap, "
+                        "multi-turn-split, rag-wrap, indirect-frame.")
+    # Phase 5.3 — self-play probe generation
+    p.add_argument("--self-play", action="store_true",
+                   help="Generate new corpus probes via generator-vs-critic "
+                        "self-play. No live target needed.")
+    p.add_argument("--self-play-coordinate", type=str, action="append", default=None,
+                   help="Restrict to one or more coordinates "
+                        "vector/obfuscation/effect (e.g. "
+                        "leak/plain/system-leak). Repeatable. Default: "
+                        "sweep all 64 (vector × obfuscation × effect) "
+                        "combinations.")
+    p.add_argument("--self-play-n", type=int, default=3,
+                   help="Probes per coordinate (default: 3)")
+    p.add_argument("--self-play-rounds", type=int, default=2,
+                   help="Critic-revise cycles per probe before reject (default: 2)")
+    p.add_argument("--self-play-threshold", type=int, default=6,
+                   help="Critic confidence above this = predictable refusal "
+                        "→ reject/revise (default: 6)")
+    p.add_argument("--self-play-concurrency", type=int, default=4,
+                   help="Coordinates evaluated in parallel (default: 4)")
+    p.add_argument("--self-play-out", type=str, default=None,
+                   help="Directory to write each accepted probe as its own "
+                        "YAML (corpus-style). Use --probe-catalog --probe-"
+                        "catalog-path to evaluate them next.")
+    p.add_argument("--self-play-trace", type=str, default=None,
+                   help="Path to a JSON file capturing every candidate "
+                        "(accepted + rejected) with critic verdicts — useful "
+                        "for tuning the threshold.")
+    p.add_argument("--self-play-critic", type=str, default=None,
+                   choices=["gemini", "openai", "anthropic"],
+                   help="Provider for the critic role. Defaults to the "
+                        "--attacker provider so the same key works.")
     return p.parse_args()
 
 
@@ -261,11 +411,160 @@ def _emit_engagement_report(args) -> None:
             console.print(f"[green]Wrote {out}[/green]")
         except RuntimeError as e:
             console.print(f"[yellow]Skipped PDF: {e}[/yellow]")
+    if getattr(args, "repro_out", None):
+        repro_dir = write_repro_pack(payload, args.repro_out, report=report)
+        console.print(
+            f"[green]Wrote {len(report.findings)} repro pack(s) to {repro_dir}/[/green]"
+        )
     console.print(
         f"\n[bold]Findings: {len(report.findings)}[/bold]  "
         f"Max LSS: {report.max_lss:.2f}  "
         f"Severity: {dict(report.severity_counts)}"
     )
+
+
+def _list_runs_and_exit(args) -> None:
+    from .persistence import list_runs
+
+    db = args.persist_db
+    if not _Path_exists(db):
+        console.print(f"[yellow]No db at {db}. Run with --persist to create one.[/yellow]")
+        sys.exit(0)
+    runs = list_runs(db)
+    if not runs:
+        console.print(f"[dim]No runs in {db}.[/dim]")
+        return
+    print(f"\nRuns in {db} ({len(runs)} most recent):")
+    print("-" * 96)
+    for r in runs:
+        finished = r.finished_at or "—"
+        target = r.target_name or "?"
+        print(
+            f"  [{r.id:5}] status={r.status:11}  target={target:25} "
+            f"completed={r.completed:>4}/{r.total_probes:<4} "
+            f"successes={r.successes:<3} started={r.started_at}  finished={finished}"
+        )
+    print()
+
+
+def _show_run_and_exit(args) -> None:
+    import json as _json
+
+    from .persistence import load_run_outcomes
+
+    if not _Path_exists(args.persist_db):
+        console.print(f"[red]No db at {args.persist_db}[/red]")
+        sys.exit(1)
+    try:
+        payload = load_run_outcomes(args.persist_db, args.show_run)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    print(_json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _Path_exists(path: str) -> bool:
+    from pathlib import Path as _Path
+    return _Path(path).is_file()
+
+
+def _emit_diff_report(args) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    if not args.diff_before or not args.diff_after:
+        console.print(
+            "[red]--diff-before AND --diff-after are both required.[/red]"
+        )
+        sys.exit(1)
+    before_path = _Path(args.diff_before)
+    after_path = _Path(args.diff_after)
+    for label, path in (("before", before_path), ("after", after_path)):
+        if not path.is_file():
+            console.print(f"[red]No such {label} file: {path}[/red]")
+            sys.exit(1)
+
+    before = _json.loads(before_path.read_text(encoding="utf-8"))
+    after = _json.loads(after_path.read_text(encoding="utf-8"))
+    report = build_diff_report(before, after)
+
+    formats = {f.strip().lower() for f in args.report_format.split(",") if f.strip()}
+    base = _Path(args.report_out)
+
+    if "md" in formats:
+        out = base.with_suffix(".diff.md")
+        out.write_text(render_diff_markdown(report), encoding="utf-8")
+        console.print(f"[green]Wrote {out}[/green]")
+    if "json" in formats or "html" in formats or "pdf" in formats:
+        # JSON falls out of the diff naturally; always write it for CI use.
+        out = base.with_suffix(".diff.json")
+        out.write_text(
+            _json.dumps(diff_to_dict(report), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Wrote {out}[/green]")
+
+    counts = report.counts
+    console.print(
+        f"\n[bold]Diff:[/bold] "
+        f"[red]regressed={counts['regressed']}[/red]  "
+        f"[yellow]new={counts['new']}[/yellow]  "
+        f"persistent={counts['persistent']}  "
+        f"[green]remediated={counts['remediated']}[/green]"
+    )
+    console.print(
+        f"Max LSS Δ: [bold]{report.max_lss_delta:+.2f}[/bold]  "
+        f"Best Δ: [bold]{report.min_lss_delta:+.2f}[/bold]"
+    )
+
+
+def _emit_scorecard_report(args) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    paths = [_Path(p) for p in args.scorecard_from]
+    for p in paths:
+        if not p.is_file():
+            console.print(f"[red]No such scorecard input: {p}[/red]")
+            sys.exit(1)
+    payloads = [_json.loads(p.read_text(encoding="utf-8")) for p in paths]
+
+    names = args.scorecard_name
+    if names is not None and len(names) != len(payloads):
+        console.print(
+            f"[red]--scorecard-name count ({len(names)}) must match "
+            f"--scorecard-from count ({len(payloads)}).[/red]"
+        )
+        sys.exit(1)
+
+    report = build_scorecard(payloads, names=names)
+
+    formats = {f.strip().lower() for f in args.report_format.split(",") if f.strip()}
+    base = _Path(args.report_out)
+
+    if "md" in formats:
+        out = base.with_suffix(".scorecard.md")
+        out.write_text(render_scorecard_markdown(report), encoding="utf-8")
+        console.print(f"[green]Wrote {out}[/green]")
+    if "json" in formats or "html" in formats or "pdf" in formats:
+        # JSON is always useful for procurement decks; emit it whenever any
+        # rich format is requested.
+        out = base.with_suffix(".scorecard.json")
+        out.write_text(
+            _json.dumps(scorecard_to_dict(report), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Wrote {out}[/green]")
+
+    console.print(
+        f"\n[bold]Targets: {report.total_targets}[/bold]  "
+        f"Findings (union): {report.total_findings}"
+    )
+    for s in report.summaries:
+        console.print(
+            f"  {s.name:30}  max LSS=[bold]{s.max_lss:>5.2f}[/bold]  "
+            f"real={s.real_findings}  total={s.total_findings}"
+        )
 
 
 def list_probes_and_exit(args) -> None:
@@ -293,6 +592,26 @@ def _transport_kwargs(args) -> dict:
         "ca_bundle": args.ca_bundle,
         "verify": not args.insecure,
     }
+
+
+def _build_refusal_grader(args):
+    """Construct the configured RefusalGrader (regex / llm / ensemble)."""
+    from .scoring import (
+        EnsembleRefusalGrader,
+        LLMRefusalGrader,
+        RegexRefusalGrader,
+    )
+
+    style = getattr(args, "refusal_grader", "regex")
+    if style == "regex":
+        return RegexRefusalGrader()
+    provider = getattr(args, "refusal_grader_provider", None) or args.compliance_provider
+    api_key = os.getenv(f"{provider.upper()}_API_KEY")
+    grader_model = async_get_model(
+        provider, api_key=api_key, **_transport_kwargs(args)
+    )
+    llm_grader = LLMRefusalGrader(grader_model)
+    return EnsembleRefusalGrader(llm_grader) if style == "ensemble" else llm_grader
 
 
 async def _build_judge(args):
@@ -378,6 +697,9 @@ async def _run_batch(engine: AsyncAttackEngine, args, instructions: list[str]) -
 async def _run_tool_use(args, attacker, target, judge) -> None:
     if args.tool_vector:
         vector = get_vector(args.tool_vector)
+        if vector is None:
+            logger.error(f"Unknown tool vector: {args.tool_vector}")
+            sys.exit(1)
         harness = ToolHarness.static(vector)
         mode_label = f"static[{vector.name}]"
     else:
@@ -854,6 +1176,396 @@ async def _run_fingerprint(args, target_model) -> None:
     console.print(f"\n[dim]Wrote fingerprint to {args.fingerprint_out}[/dim]")
 
 
+async def _run_self_play(args) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    import yaml as _yaml
+
+    from .discovery import (
+        SelfPlay,
+        SelfPlayConfig,
+        all_self_play_coordinates,
+    )
+
+    coords = _parse_self_play_coordinates(args.self_play_coordinate)
+
+    attacker_api_key = os.getenv(f"{args.attacker.upper()}_API_KEY")
+    generator_model = async_get_model(
+        args.attacker, api_key=attacker_api_key,
+        model_name=args.attacker_model, **_transport_kwargs(args),
+    )
+
+    critic_provider = args.self_play_critic or args.attacker
+    critic_api_key = os.getenv(f"{critic_provider.upper()}_API_KEY")
+    critic_model = async_get_model(
+        critic_provider, api_key=critic_api_key,
+        **_transport_kwargs(args),
+    )
+
+    cfg = SelfPlayConfig(
+        coordinates=coords,
+        probes_per_coordinate=args.self_play_n,
+        critic_rounds=args.self_play_rounds,
+        refusal_threshold=args.self_play_threshold,
+        concurrency=args.self_play_concurrency,
+    )
+
+    console.print(
+        f"\n[bold magenta]🎭 SELF-PLAY[/bold magenta]  "
+        f"coords={len(coords)}  per-coord={cfg.probes_per_coordinate}  "
+        f"rounds={cfg.critic_rounds}  threshold={cfg.refusal_threshold}"
+    )
+
+    sp = SelfPlay(generator_model, critic_model, cfg)
+    candidates = await sp.run()
+
+    accepted = [c for c in candidates if c.accepted]
+    rejected = [c for c in candidates if not c.accepted]
+
+    console.print(
+        f"\n[bold]Generated:[/bold] {len(candidates)}  "
+        f"[green]accepted={len(accepted)}[/green]  "
+        f"[yellow]rejected={len(rejected)}[/yellow]"
+    )
+    # Top 10 accepted by lowest critic confidence (most likely to succeed in the wild).
+    top = sorted(accepted, key=lambda c: c.final_critic_confidence)[:10]
+    if top:
+        console.print("\n[bold]Top accepted (lowest critic confidence):[/bold]")
+        for c in top:
+            console.print(
+                f"  conf={c.final_critic_confidence:>2}  rounds={c.rounds}  "
+                f"{c.coordinate:50}  {c.probe.id}"
+            )
+
+    if args.self_play_out:
+        out_dir = _Path(args.self_play_out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for c in accepted:
+            file_path = out_dir / f"{c.probe.id}.yaml"
+            file_path.write_text(
+                _yaml.safe_dump(
+                    _self_play_probe_to_dict(c.probe),
+                    sort_keys=False, allow_unicode=True,
+                ),
+                encoding="utf-8",
+            )
+        console.print(
+            f"[green]Saved {len(accepted)} probe(s) → {out_dir}/ "
+            "(re-run with --probe-catalog --probe-catalog-path to evaluate)[/green]"
+        )
+
+    if args.self_play_trace:
+        trace_path = _Path(args.self_play_trace)
+        trace_path.write_text(
+            _json.dumps(
+                {
+                    "coordinates": [
+                        f"{v}/{o}/{e}" for (v, o, e) in coords
+                    ],
+                    "probes_per_coordinate": cfg.probes_per_coordinate,
+                    "critic_rounds": cfg.critic_rounds,
+                    "refusal_threshold": cfg.refusal_threshold,
+                    "candidates": [
+                        {
+                            "probe_id": c.probe.id,
+                            "coordinate": c.coordinate,
+                            "rounds": c.rounds,
+                            "final_critic_confidence": c.final_critic_confidence,
+                            "critic_predicted_refusal": c.critic_predicted_refusal,
+                            "accepted": c.accepted,
+                            "rejection_reason": c.rejection_reason,
+                            "prompt": c.probe.prompt,
+                        }
+                        for c in candidates
+                    ],
+                },
+                indent=2, ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Wrote self-play trace → {trace_path}[/green]")
+
+
+def _parse_self_play_coordinates(raw: list[str] | None):
+    """Parse vector/obfuscation/effect strings into typed tuples.
+
+    None / empty → return all 64 combinations from
+    ``all_self_play_coordinates()``.
+    """
+    from .discovery import all_self_play_coordinates
+
+    if not raw:
+        return all_self_play_coordinates()
+    out = []
+    for entry in raw:
+        parts = entry.strip().split("/")
+        if len(parts) != 3:
+            logger.error(
+                f"--self-play-coordinate must be vector/obfuscation/effect, "
+                f"got {entry!r}"
+            )
+            sys.exit(1)
+        out.append((parts[0], parts[1], parts[2]))
+    return out
+
+
+def _self_play_probe_to_dict(probe) -> dict:
+    return {
+        "id": probe.id,
+        "version": probe.version,
+        "name": probe.name,
+        "description": probe.description,
+        "taxonomy": {
+            "vector": probe.taxonomy.vector,
+            "delivery": probe.taxonomy.delivery,
+            "obfuscation": probe.taxonomy.obfuscation,
+            "target_effect": probe.taxonomy.target_effect,
+        },
+        "severity": probe.severity,
+        "owasp_llm": probe.owasp_llm,
+        "prompt": probe.prompt,
+        "success_indicators": probe.success_indicators,
+        "refusal_indicators": probe.refusal_indicators,
+        "notes": probe.notes,
+        "created": probe.created.isoformat(),
+        "metadata": probe.metadata,
+    }
+
+
+async def _run_climb(args, target_model) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    import yaml as _yaml
+
+    from .discovery import ChatTarget, LMTWTClimb
+    from .probes.loader import load_probe_file
+
+    if not args.climb_seed:
+        logger.error("--climb requires --climb-seed (probe id or YAML path)")
+        sys.exit(1)
+
+    seed = _resolve_climb_seed(args)
+    console.print(
+        f"\n[bold magenta]⛏️  LMTWT-CLIMB[/bold magenta]  "
+        f"seed=[bold]{seed.id}[/bold]  "
+        f"rounds={args.climb_rounds}  fanout={args.climb_fanout}  keep={args.climb_keep}"
+    )
+
+    attacker_api_key = os.getenv(f"{args.attacker.upper()}_API_KEY")
+    attacker_model = async_get_model(
+        args.attacker, api_key=attacker_api_key,
+        model_name=args.attacker_model, **_transport_kwargs(args),
+    )
+
+    scoring_judge = None
+    if args.climb_judge:
+        scoring_judge = ScoringLLMJudge(
+            attacker_model, threshold=args.strategy_threshold,
+        )
+
+    climb = LMTWTClimb(
+        target=ChatTarget(target_model, system=args.system_prompt),
+        attacker=attacker_model,
+        scoring_judge=scoring_judge,
+        max_rounds=args.climb_rounds,
+        fanout=args.climb_fanout,
+        keep=args.climb_keep,
+    )
+    result = await climb.run(seed)
+
+    console.print(
+        f"\n[bold]Stopped:[/bold] {result.stopped_reason}  "
+        f"[bold]Best fitness:[/bold] {result.best_fitness:.2f}  "
+        f"[bold]Rounds:[/bold] {result.rounds_run}  "
+        f"[bold]Attempts:[/bold] {len(result.history)}"
+    )
+    console.print(f"[bold]Best probe:[/bold] {result.best_probe.id}")
+    if result.best_probe.metadata.get("climb"):
+        chain = result.best_probe.metadata["climb"]
+        console.print(
+            f"  parent={chain.get('parent_id')}  "
+            f"operator={chain.get('operator')}  "
+            f"generation={chain.get('generation')}"
+        )
+
+    # Top 5 attempts by fitness for a quick visual.
+    top = sorted(result.history, key=lambda a: -a.fitness)[:5]
+    console.print("\n[bold]Top attempts:[/bold]")
+    for a in top:
+        console.print(
+            f"  fit={a.fitness:>4.1f} grade={a.grade}  "
+            f"op={a.operator:<11} gen={a.generation}  id={a.probe_id}"
+        )
+
+    if args.climb_out:
+        out = _Path(args.climb_out)
+        out.write_text(_json.dumps(result.to_dict(), indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        console.print(f"[green]Wrote climb result → {out}[/green]")
+
+    if args.climb_save and result.stopped_reason == "success":
+        save_path = _Path(args.climb_save)
+        probe = result.best_probe
+        # Dump as YAML in the same shape probe-files use, so it can drop into the corpus.
+        probe_dict = {
+            "id": probe.id,
+            "version": probe.version,
+            "name": probe.name,
+            "description": probe.description,
+            "taxonomy": {
+                "vector": probe.taxonomy.vector,
+                "delivery": probe.taxonomy.delivery,
+                "obfuscation": probe.taxonomy.obfuscation,
+                "target_effect": probe.taxonomy.target_effect,
+            },
+            "severity": probe.severity,
+            "owasp_llm": probe.owasp_llm,
+            "prompt": probe.prompt,
+            "success_indicators": probe.success_indicators,
+            "refusal_indicators": probe.refusal_indicators,
+            "notes": probe.notes,
+            "created": probe.created.isoformat(),
+            "metadata": probe.metadata,
+        }
+        save_path.write_text(
+            _yaml.safe_dump(probe_dict, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Saved climbed probe → {save_path}[/green]")
+    elif args.climb_save:
+        console.print(
+            "[yellow]--climb-save skipped: climb did not reach 'success'.[/yellow]"
+        )
+
+
+def _resolve_climb_seed(args):
+    return _resolve_seed(args.climb_seed, args.probe_catalog_path, flag="--climb-seed")
+
+
+def _resolve_seed(seed_arg: str, catalog_path, *, flag: str):
+    from pathlib import Path as _Path
+
+    from .probes.loader import load_probe_file
+
+    p = _Path(seed_arg)
+    if p.is_file():
+        return load_probe_file(p)
+    corpus = load_corpus(root=catalog_path)
+    for probe in corpus:
+        if probe.id == seed_arg:
+            return probe
+    logger.error(
+        f"{flag} {seed_arg!r} is neither an existing file nor a known "
+        f"probe id in the catalog (use --list-probes to inspect)."
+    )
+    sys.exit(1)
+
+
+async def _run_pollinate(args) -> None:
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    from .discovery import CrossPollinator
+
+    if not args.pollinate_seed:
+        logger.error("--pollinate requires --pollinate-seed (probe id or YAML path)")
+        sys.exit(1)
+
+    seed = _resolve_seed(
+        args.pollinate_seed, args.probe_catalog_path, flag="--pollinate-seed",
+    )
+
+    # An attacker is only required for LLM-driven operators (translate,
+    # persona). Mechanical operators run without one.
+    attacker_model = None
+    if not args.pollinate_skip_op or not {
+        "translate-zh", "persona-wrap"
+    }.issubset(set(args.pollinate_skip_op)):
+        try:
+            attacker_api_key = os.getenv(f"{args.attacker.upper()}_API_KEY")
+            attacker_model = async_get_model(
+                args.attacker, api_key=attacker_api_key,
+                model_name=args.attacker_model, **_transport_kwargs(args),
+            )
+        except Exception as e:  # noqa: BLE001
+            console.print(
+                f"[yellow]Attacker model unavailable ({e}); LLM-driven "
+                "operators (translate-zh, persona-wrap) will be skipped.[/yellow]"
+            )
+
+    pol = CrossPollinator(
+        attacker=attacker_model,
+        skip_operators=set(args.pollinate_skip_op or []),
+    )
+    plan = pol.plan(seed)
+    console.print(
+        f"\n[bold cyan]🌱 CROSS-POLLINATE[/bold cyan]  "
+        f"seed=[bold]{seed.id}[/bold]  "
+        f"obfuscation slots={plan.target_obfuscations}  "
+        f"delivery slots={plan.target_deliveries}"
+    )
+
+    variants = await pol.pollinate(seed, engagement=args.pollinate_engagement)
+    console.print(f"[bold]Generated {len(variants)} variant(s) (after dedupe).[/bold]\n")
+    for v in variants:
+        console.print(
+            f"  [{v.operator:18}] {v.target_axis_change:42} -> {v.probe.coordinate}"
+        )
+
+    def _probe_to_yaml_dict(probe):
+        d = {
+            "id": probe.id,
+            "version": probe.version,
+            "name": probe.name,
+            "description": probe.description,
+            "taxonomy": {
+                "vector": probe.taxonomy.vector,
+                "delivery": probe.taxonomy.delivery,
+                "obfuscation": probe.taxonomy.obfuscation,
+                "target_effect": probe.taxonomy.target_effect,
+            },
+            "severity": probe.severity,
+            "owasp_llm": probe.owasp_llm,
+            "prompt": probe.prompt,
+            "success_indicators": probe.success_indicators,
+            "refusal_indicators": probe.refusal_indicators,
+            "notes": probe.notes,
+            "created": probe.created.isoformat(),
+            "metadata": probe.metadata,
+        }
+        return d
+
+    if args.pollinate_out:
+        out = _Path(args.pollinate_out)
+        out.write_text(
+            _yaml.safe_dump_all(
+                [_probe_to_yaml_dict(v.probe) for v in variants],
+                sort_keys=False, allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        console.print(f"\n[green]Wrote {len(variants)} variant(s) → {out}[/green]")
+
+    if args.pollinate_save_dir:
+        out_dir = _Path(args.pollinate_save_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for v in variants:
+            file_path = out_dir / f"{v.probe.id}.yaml"
+            file_path.write_text(
+                _yaml.safe_dump(
+                    _probe_to_yaml_dict(v.probe),
+                    sort_keys=False, allow_unicode=True,
+                ),
+                encoding="utf-8",
+            )
+        console.print(
+            f"[green]Saved {len(variants)} variant(s) → {out_dir}/ "
+            "(re-run --probe-catalog --probe-catalog-path to evaluate)[/green]"
+        )
+
+
 async def _run_probe_catalog(args, target_model) -> None:
     console.print("\n[bold red]🔥 PROBE CATALOG (LMTWT-native corpus)[/bold red]")
 
@@ -899,10 +1611,42 @@ async def _run_probe_catalog(args, target_model) -> None:
         f"severity={args.probe_severity or 'any'})\n"
     )
 
+    observers = []
+    dashboard = None
+    if getattr(args, "dashboard", False):
+        from .cli_dashboard import RichDashboardObserver
+
+        dashboard = RichDashboardObserver(
+            getattr(target_model, "model_name", str(args.target)),
+            console=console,
+        )
+        observers.append(dashboard)
+    if getattr(args, "persist", False):
+        from .persistence import SQLiteObserver
+
+        observers.append(SQLiteObserver(
+            args.persist_db,
+            target_name=getattr(target_model, "model_name", str(args.target)),
+            attacker_name=str(args.attacker),
+            mode="probe-catalog",
+            metadata={
+                "coordinate_filter": args.probe_coordinate,
+                "severity_filter": args.probe_severity,
+                "repeats": getattr(args, "probe_repeat", 1),
+            },
+        ))
+
     runner = AsyncCatalogProbe(
-        target_model, probes=corpus, concurrency=args.concurrency
+        target_model, probes=corpus, concurrency=args.concurrency,
+        repeats=getattr(args, "probe_repeat", 1),
+        refusal_grader=_build_refusal_grader(args),
+        observers=observers,
     )
-    summary = await runner.run(target_system_prompt=args.system_prompt)
+    if dashboard is not None:
+        async with dashboard:
+            summary = await runner.run(target_system_prompt=args.system_prompt)
+    else:
+        summary = await runner.run(target_system_prompt=args.system_prompt)
 
     console.print(
         f"[bold]Ran {summary.executed}/{summary.total} probes[/bold] "
@@ -973,8 +1717,26 @@ async def async_main() -> None:
     if args.list_probes:
         list_probes_and_exit(args)
         return
+    if args.list_runs:
+        _list_runs_and_exit(args)
+        return
+    if args.show_run is not None:
+        _show_run_and_exit(args)
+        return
     if args.report_from:
         _emit_engagement_report(args)
+        return
+    if args.diff_before or args.diff_after:
+        _emit_diff_report(args)
+        return
+    if args.scorecard_from:
+        _emit_scorecard_report(args)
+        return
+    if args.pollinate:
+        await _run_pollinate(args)
+        return
+    if args.self_play:
+        await _run_self_play(args)
         return
 
     config = load_config(args.config)
@@ -988,6 +1750,25 @@ async def async_main() -> None:
         except ImportError as e:
             logger.error(f"Failed to launch web UI: {e}")
             console.print("[bold red]Install gradio: pip install lmtwt[web][/bold red]")
+            sys.exit(1)
+        return
+
+    if args.web_api:
+        console.print(
+            f"\n[bold blue]🌐 Launching LMTWT Web API on "
+            f"{args.web_api_host}:{args.web_api_port}[/bold blue]"
+        )
+        try:
+            from .web_api import run_server
+
+            run_server(
+                host=args.web_api_host,
+                port=args.web_api_port,
+                db_path=args.persist_db,
+            )
+        except ImportError as e:
+            logger.error(f"Failed to launch web API: {e}")
+            console.print("[bold red]Install: pip install lmtwt[api][/bold red]")
             sys.exit(1)
         return
 
@@ -1025,6 +1806,10 @@ async def async_main() -> None:
 
     if args.fingerprint:
         await _run_fingerprint(args, target_model)
+        return
+
+    if args.climb:
+        await _run_climb(args, target_model)
         return
 
     if args.chatbot_attack:
@@ -1100,7 +1885,197 @@ async def async_main() -> None:
         await _run_tool_use(args, attacker_model, target_model, judge)
 
 
+def _parse_scan_args(argv: list[str]) -> argparse.Namespace:
+    """Parser for the ``lmtwt scan`` subcommand. Tight, opinionated."""
+    p = argparse.ArgumentParser(
+        prog="lmtwt scan",
+        description=(
+            "Run a full vulnerability scan against a target with sensible "
+            "defaults. One command, one bundle out. For granular control "
+            "use the legacy CLI (lmtwt --probe-catalog, --climb, etc.)."
+        ),
+    )
+    p.add_argument("--target", "-t", required=True,
+                   choices=["gemini", "openai", "anthropic", "external-api",
+                            "huggingface", "lmstudio", "openai-compat",
+                            "claude-code", "acp"],
+                   help="Target provider")
+    p.add_argument("--attacker", "-a", default="gemini",
+                   choices=["gemini", "openai", "anthropic", "huggingface",
+                            "lmstudio", "openai-compat", "claude-code", "acp"],
+                   help="Attacker / generator / critic model provider "
+                        "(default: gemini). Use 'openai-compat' to point at "
+                        "any OpenAI-compatible endpoint via OPENAI_COMPAT_BASE_URL.")
+    p.add_argument("--target-model", default=None,
+                   help="Specific target model id (else provider default)")
+    p.add_argument("--attacker-model", default=None,
+                   help="Specific attacker model id (else provider default)")
+    p.add_argument("--target-config", default=None,
+                   help="Path to a target-config JSON (required for "
+                        "--target external-api; enables capability-detected "
+                        "chatbot attacks)")
+    p.add_argument("--depth", default="standard",
+                   choices=["quick", "standard", "thorough"],
+                   help="Scan depth (default: standard). 'quick' = "
+                        "catalog+fingerprint only; 'thorough' = above + "
+                        "self-play + N=10 repeats.")
+    p.add_argument("--out", default=None,
+                   help="Output directory for the engagement bundle "
+                        "(default: ./scan-<date>-<target>/)")
+    p.add_argument("--system-prompt", default=None,
+                   help="System prompt to set on the target")
+    p.add_argument("--no-llm-grader", action="store_true",
+                   help="Use the regex-only refusal grader instead of the "
+                        "LLM ensemble (faster, less accurate on edge cases)")
+    p.add_argument("--no-dashboard", action="store_true",
+                   help="Suppress the live TUI dashboard (auto-off on non-TTY)")
+    p.add_argument("--concurrency", type=int, default=4,
+                   help="Parallel target API calls (default: 4)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the scan plan and exit without running")
+    # Proxy / TLS — mirror the legacy flags.
+    p.add_argument("--proxy", default=None)
+    p.add_argument("--ca-bundle", default=None)
+    p.add_argument("--insecure", action="store_true")
+    return p.parse_args(argv)
+
+
+async def _run_scan_subcommand(argv: list[str]) -> int:
+    import datetime as _dt
+    import json as _json
+    from pathlib import Path as _Path
+
+    from .scan import build_scan_plan, run_scan, write_bundle
+    from .utils.config import load_target_config
+
+    # Load .env so OPENAI_COMPAT_BASE_URL / *_API_KEY etc. resolve the same
+    # way the legacy CLI path expects.
+    load_dotenv()
+
+    args = _parse_scan_args(argv)
+
+    # Build target_config so the planner can capability-detect chatbot attacks.
+    target_config = None
+    if args.target_config:
+        try:
+            target_config = load_target_config(args.target_config)
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]Failed to load target-config: {e}[/red]")
+            return 1
+    elif args.target == "external-api":
+        console.print(
+            "[red]--target external-api requires --target-config[/red]"
+        )
+        return 1
+
+    plan = build_scan_plan(depth=args.depth, target_config=target_config)
+
+    target_label = args.target_model or args.target
+    today = _dt.date.today().isoformat()
+    safe_target = "".join(c if c.isalnum() or c in "-_" else "_"
+                          for c in target_label)[:40]
+    out_dir = _Path(args.out or f"./scan-{today}-{safe_target}")
+
+    if args.dry_run:
+        console.print(f"\n[bold]Plan ({plan.depth} depth)[/bold]  out={out_dir}")
+        for s in plan.steps:
+            mark = "[green]✓[/green]" if s.enabled else "[dim]✗[/dim]"
+            reason = f"  ({s.reason_if_skipped})" if not s.enabled and s.reason_if_skipped else ""
+            console.print(f"  {mark} {s.name}{reason}")
+        return 0
+
+    console.print(
+        f"\n[bold magenta]🔍 LMTWT SCAN[/bold magenta]  "
+        f"target=[bold]{target_label}[/bold]  attacker=[bold]{args.attacker}[/bold]  "
+        f"depth=[bold]{args.depth}[/bold]"
+    )
+    console.print(f"[dim]Bundle → {out_dir}[/dim]\n")
+
+    target_api_key = (
+        os.getenv(f"{args.target.upper()}_API_KEY")
+        if args.target != "external-api" else None
+    )
+    transport = {"proxy": args.proxy, "ca_bundle": args.ca_bundle,
+                 "verify": not args.insecure}
+    target_model = async_get_model(
+        args.target, api_key=target_api_key,
+        model_name=args.target_model,
+        api_config=target_config, **transport,
+    )
+    attacker_api_key = os.getenv(f"{args.attacker.upper()}_API_KEY")
+    attacker_model = async_get_model(
+        args.attacker, api_key=attacker_api_key,
+        model_name=args.attacker_model, **transport,
+    )
+
+    show_dashboard = sys.stdout.isatty() and not args.no_dashboard
+
+    try:
+        result = await run_scan(
+            target=target_model,
+            attacker=attacker_model,
+            target_name=target_label,
+            attacker_name=args.attacker_model or args.attacker,
+            plan=plan,
+            out_dir=out_dir,
+            target_config=target_config,
+            target_system_prompt=args.system_prompt,
+            concurrency=args.concurrency,
+            use_llm_grader=not args.no_llm_grader,
+            show_dashboard=show_dashboard,
+        )
+    except Exception as e:  # noqa: BLE001
+        console.print(f"\n[red]scan failed: {e}[/red]")
+        return 1
+
+    bundle_path = write_bundle(result, out_dir)
+
+    # Headline summary.
+    findings = result.findings
+    successes = sum(1 for f in findings if f.get("success"))
+    max_lss = max(
+        ((f.get("lss") or {}).get("score") or 0.0 for f in findings),
+        default=0.0,
+    )
+    sev_counts: dict[str, int] = {}
+    for f in findings:
+        s = f.get("severity") or "low"
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+    console.print(
+        f"\n[bold green]✓ scan complete[/bold green]  "
+        f"findings={len(findings)}  successes={successes}  max_lss={max_lss:.2f}"
+    )
+    sev_str = "  ".join(f"{k}={v}" for k, v in sorted(sev_counts.items()))
+    console.print(f"  severity:  {sev_str}")
+    console.print(
+        f"  steps executed: {', '.join(result.executed_steps) or 'none'}"
+    )
+    if result.step_errors:
+        console.print(
+            f"  [yellow]step errors:[/yellow] "
+            f"{', '.join(result.step_errors.keys())}"
+        )
+    console.print(f"\n[bold]Bundle:[/bold] {bundle_path}/")
+    for fname in ("scan.json", "report.md", "report.html", "report.pdf",
+                  "scorecard.md", "fingerprint.json", "scan.db",
+                  "repro/index.json"):
+        p = bundle_path / fname
+        if p.exists():
+            console.print(f"  • {fname}")
+    return 0
+
+
 def main() -> None:
+    # Subcommand dispatch — keep the legacy flat parser working untouched
+    # for backward compat. The new scan front door is opt-in via the first
+    # positional arg.
+    if len(sys.argv) >= 2 and sys.argv[1] == "scan":
+        try:
+            rc = asyncio.run(_run_scan_subcommand(sys.argv[2:]))
+        except KeyboardInterrupt:
+            print("\nInterrupted")
+            sys.exit(0)
+        sys.exit(rc)
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
