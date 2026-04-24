@@ -12,10 +12,14 @@ command for the common case:
 lmtwt scan --target <provider> --attacker <provider> [--target-config x.json]
 ```
 
-Composes every existing technique automatically (fingerprint → catalog →
-adaptive → climb → pollinate → chatbot attacks), capability-detects which
-chatbot-protocol attacks apply from the target-config, and writes a complete
-engagement bundle to `./scan-<date>-<target>/`:
+Composes **every** technique LMTWT supports — fingerprint → catalog →
+adaptive → climb → pollinate → chatbot attacks (always-on +
+capability-detected) → PAIR + TAP refinement → multi-turn flows. Self-play
+is reserved for `--depth thorough` because it's target-independent corpus
+generation. Capability-gated chatbot attacks (session-lifecycle, JWT-claims,
+conversation-hijack) auto-detect from the target-config and skip with a
+printed reason when prerequisites are missing. The engagement bundle lands
+in `./scan-<date>-<target>/`:
 
 ```
 scan.json   report.md   report.html   report.pdf   scorecard.md

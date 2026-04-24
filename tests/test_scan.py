@@ -108,6 +108,50 @@ def test_chatbot_always_on_attacks_run_with_empty_target_config():
     assert "chatbot.tool_result_poisoning" in enabled
 
 
+def test_standard_depth_enables_pair_tap_and_multi_turn():
+    """The whole point of `lmtwt scan`: standard runs every attack mode."""
+    plan = build_scan_plan(depth="standard")
+    enabled = set(plan.enabled_step_names())
+    assert "strategy.pair" in enabled
+    assert "strategy.tap" in enabled
+    assert "multi_turn" in enabled
+
+
+def test_quick_depth_omits_pair_tap_and_multi_turn():
+    """Quick should be just the catalog + always-on chatbot — fast path."""
+    plan = build_scan_plan(depth="quick")
+    enabled = set(plan.enabled_step_names())
+    assert "strategy.pair" not in enabled
+    assert "strategy.tap" not in enabled
+    assert "multi_turn" not in enabled
+
+
+def test_pair_step_has_iterations_and_threshold_kwargs():
+    plan = build_scan_plan(depth="standard")
+    pair = plan.get("strategy.pair")
+    assert pair is not None
+    assert pair.kwargs.get("iterations", 0) > 0
+    assert pair.kwargs.get("threshold", 0) > 0
+
+
+def test_tap_step_has_branching_depth_prune_kwargs():
+    plan = build_scan_plan(depth="standard")
+    tap = plan.get("strategy.tap")
+    assert tap is not None
+    for key in ("branching", "depth", "prune", "threshold"):
+        assert key in tap.kwargs, f"missing tap kwarg {key!r}"
+
+
+def test_thorough_depth_cranks_pair_iterations_higher():
+    quick = build_scan_plan(depth="quick").get("strategy.pair")
+    standard = build_scan_plan(depth="standard").get("strategy.pair")
+    thorough = build_scan_plan(depth="thorough").get("strategy.pair")
+    # Quick is disabled but the step is still present (with reason).
+    assert quick is not None and quick.enabled is False
+    assert standard.enabled and thorough.enabled
+    assert thorough.kwargs["iterations"] > standard.kwargs["iterations"]
+
+
 def test_chatbot_attacks_all_disabled_in_quick_when_disabled_globally():
     """A future depth that turns off chatbot attacks should mark each with the reason."""
     # quick keeps chatbot attacks; verify the *attribution* path works.
@@ -206,6 +250,103 @@ def test_pick_climb_seeds_dedupes_near_misses_by_probe_id():
     ]
     seeds = _pick_climb_seeds(findings, max_seeds=10)
     assert [s["probe_id"] for s in seeds] == ["p1", "p2"]
+
+
+@pytest.mark.asyncio
+async def test_run_scan_standard_depth_executes_every_attack_mode(tmp_path: Path):
+    """Standard depth should fire fingerprint, catalog, climb (skipped if no
+    seeds), pollinate (skipped if no seeds), PAIR, TAP, multi-turn, and the
+    always-on chatbot attacks. We stub both target and attacker so this
+    runs offline."""
+    from lmtwt.scan.orchestrator import run_scan
+
+    # Target: refuses everything → catalog produces no seeds for climb,
+    # PAIR/TAP get to run their full loop, multi-turn flows complete.
+    target = AsyncMock()
+    target.chat = AsyncMock(return_value=ChatResponse(
+        content="I cannot help with that request.", model="t",
+    ))
+    target.model_name = "t"
+
+    # Attacker covers PAIR's attacker, TAP's attacker, multi-turn's
+    # next-turn generator, and ScoringLLMJudge calls. The judge expects
+    # SCORE: <int>; everything else can be a generic refusal-shaped reply.
+    call_count = {"n": 0}
+
+    async def attacker_chat(conv, **kwargs):  # noqa: ARG001
+        call_count["n"] += 1
+        # Half the time, pretend to be the judge and return a low score.
+        sys = (conv.messages[0].content if conv.messages else "")
+        if "score" in sys.lower():
+            return ChatResponse(content="SCORE: 2\nREASON: refused.", model="a")
+        return ChatResponse(content="rephrased follow-up question", model="a")
+
+    attacker = AsyncMock()
+    attacker.chat = attacker_chat
+    attacker.model_name = "a"
+
+    plan = build_scan_plan(depth="standard")
+    result = await run_scan(
+        target=target, attacker=attacker,
+        target_name="t", attacker_name="a",
+        plan=plan, out_dir=tmp_path / "scan",
+        use_llm_grader=False,
+    )
+
+    # Headline: every attack mode was executed.
+    executed = set(result.executed_steps)
+    for required in (
+        "fingerprint", "catalog", "strategy.pair", "strategy.tap", "multi_turn",
+        "chatbot.cost_amplification", "chatbot.refusal_fatigue",
+        "chatbot.tool_result_poisoning",
+    ):
+        assert required in executed, f"step {required!r} did not execute"
+
+    # And findings actually got produced from the new steps.
+    pair_findings = [f for f in result.findings if f.get("source_step") == "strategy.pair"]
+    tap_findings = [f for f in result.findings if f.get("source_step") == "strategy.tap"]
+    mt_findings = [f for f in result.findings if f.get("source_step") == "multi_turn"]
+    assert pair_findings, "PAIR produced no findings"
+    assert tap_findings, "TAP produced no findings"
+    assert mt_findings, "multi-turn produced no findings"
+
+
+@pytest.mark.asyncio
+async def test_capability_gated_chatbot_attacks_skip_with_reason_on_plain_target(tmp_path: Path):
+    """session_lifecycle / jwt / hijack should record a step error rather than
+    crashing when the target isn't external-api with the right config."""
+    plan = build_scan_plan(
+        depth="standard",
+        target_config={
+            "payload_template": {"x": ""},
+            "headers": {"Authorization": "Bearer eyJ.test"},
+            "session_id_key": "session_id",
+        },
+    )
+    # Plain target (not external-api) — capability-gated attacks need
+    # api_config attribute on the target. Should be soft-skipped.
+    target = AsyncMock()
+    target.chat = AsyncMock(return_value=ChatResponse(content="ok", model="t"))
+    target.model_name = "t"
+    attacker = AsyncMock()
+    attacker.chat = AsyncMock(return_value=ChatResponse(content="ok", model="a"))
+    attacker.model_name = "a"
+
+    from lmtwt.scan.orchestrator import run_scan
+
+    result = await run_scan(
+        target=target, attacker=attacker,
+        target_name="t", attacker_name="a",
+        plan=plan, out_dir=tmp_path / "scan",
+        use_llm_grader=False,
+    )
+    # Each capability-gated attack should be in step_errors with a soft message.
+    for step_name in ("chatbot.session_lifecycle", "chatbot.jwt_claims",
+                      "chatbot.conversation_hijack"):
+        assert step_name in result.step_errors
+        assert "prerequisites not met" in result.step_errors[step_name]
+    # The scan still finished and other steps still ran.
+    assert "catalog" in result.executed_steps
 
 
 @pytest.mark.asyncio
