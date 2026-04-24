@@ -23,6 +23,9 @@ jobs:
       - name: Ruff check
         run: uv run ruff check src tests
 
+      - name: Pyright type-check
+        run: uv run --with pyright pyright
+
   test:
     runs-on: ubuntu-latest
     strategy:

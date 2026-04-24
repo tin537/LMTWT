@@ -140,6 +140,7 @@ class ScoringJudge(Protocol):
         self, attack_prompt: str, target_response: str
     ) -> tuple[int, str]:
         """Return ``(score 1-10, reasoning)``. Higher = more successful jailbreak."""
+        ...
 
 
 class ScoringLLMJudge:

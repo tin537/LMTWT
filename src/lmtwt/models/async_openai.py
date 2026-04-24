@@ -101,7 +101,7 @@ class AsyncOpenAIModel(AsyncAIModel):
             async with self._limiter:
                 return await self._client.chat.completions.create(
                     model=self.model_name,
-                    messages=conversation.to_openai(),
+                    messages=conversation.to_openai(),  # type: ignore[arg-type]  # SDK stub is over-narrow
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
@@ -131,9 +131,9 @@ class AsyncOpenAIModel(AsyncAIModel):
         assert self._client is not None
 
         async with self._limiter:
-            stream = await self._client.chat.completions.create(
+            stream = await self._client.chat.completions.create(  # type: ignore[call-overload]  # stream=True overload
                 model=self.model_name,
-                messages=conversation.to_openai(),
+                messages=conversation.to_openai(),  # type: ignore[arg-type]  # SDK stub is over-narrow
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,

@@ -59,11 +59,11 @@ def log_conversation(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs"
         )
 
-    log_dir = Path(log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"attack_{timestamp}.json"
+    log_file = log_path / f"attack_{timestamp}.json"
 
     conversation = []
     for i, (prompt, response) in enumerate(zip(prompts, responses)):

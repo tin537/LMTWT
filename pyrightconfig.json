@@ -1,0 +1,25 @@
+{
+  "include": ["src/lmtwt"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    ".venv",
+    "src/lmtwt/web"
+  ],
+  "ignore": [
+    "src/lmtwt/utils/report_generator.py",
+    "src/lmtwt/attacks/templates.py"
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true,
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "reportPrivateImportUsage": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportGeneralTypeIssues": "warning",
+  "reportOptionalMemberAccess": "warning",
+  "reportAttributeAccessIssue": "warning"
+}

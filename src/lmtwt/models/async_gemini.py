@@ -115,7 +115,7 @@ class AsyncGeminiModel(AsyncAIModel):
             async with self._limiter:
                 return await self._client.aio.models.generate_content(
                     model=self.model_name,
-                    contents=contents,
+                    contents=contents,  # type: ignore[arg-type]  # SDK stub is over-narrow
                     config=config,
                 )
 
@@ -154,7 +154,7 @@ class AsyncGeminiModel(AsyncAIModel):
         async with self._limiter:
             stream = await self._client.aio.models.generate_content_stream(
                 model=self.model_name,
-                contents=contents,
+                contents=contents,  # type: ignore[arg-type]  # SDK stub is over-narrow
                 config=config,
             )
             final_resp = None

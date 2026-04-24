@@ -57,9 +57,9 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
             "config.json",
         )
 
-    config_path = Path(config_path)
+    config_file = Path(config_path)
 
-    if not config_path.exists():
+    if not config_file.exists():
         # Create default config file
         default_config = {
             "models": {
@@ -91,16 +91,16 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         }
 
         # Create directory if it doesn't exist
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Write default config
-        with open(config_path, "w") as f:
+        with open(config_file, "w") as f:
             json.dump(default_config, f, indent=2)
 
         return default_config
 
     # Load existing config file
-    with open(config_path) as f:
+    with open(config_file) as f:
         return json.load(f)
 
 
@@ -118,11 +118,11 @@ def save_config(config: dict[str, Any], config_path: str | None = None):
             "config.json",
         )
 
-    config_path = Path(config_path)
+    config_file = Path(config_path)
 
     # Create directory if it doesn't exist
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Write config
-    with open(config_path, "w") as f:
+    with open(config_file, "w") as f:
         json.dump(config, f, indent=2)

@@ -87,6 +87,7 @@ class AsyncHuggingFaceModel(AsyncAIModel):
         prompt = _format_prompt(conversation)
 
         def _run():
+            assert self._pipeline is not None
             return self._pipeline(
                 prompt,
                 max_new_tokens=max_tokens,
