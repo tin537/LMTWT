@@ -132,7 +132,7 @@ def _normalize_one(raw: dict) -> Finding | None:
 
 
 def build_report(
-    run_payload: dict,
+    run_payload: dict | list,
     *,
     target_name: str | None = None,
     attacker_name: str | None = None,
