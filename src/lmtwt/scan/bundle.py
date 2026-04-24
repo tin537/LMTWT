@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sqlite3
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,7 +41,7 @@ if TYPE_CHECKING:
     from .orchestrator import ScanResult
 
 
-def write_bundle(result: "ScanResult", out_dir: Path | str) -> Path:
+def write_bundle(result: ScanResult, out_dir: Path | str) -> Path:
     """Write the full engagement bundle into ``out_dir``. Returns the path.
 
     Idempotent: re-runs overwrite. Non-existent ``out_dir`` is created.
@@ -110,7 +109,7 @@ def write_bundle(result: "ScanResult", out_dir: Path | str) -> Path:
 # ---------------------------------------------------------------- helpers
 
 
-def _plan_to_dict(result: "ScanResult") -> dict[str, Any]:
+def _plan_to_dict(result: ScanResult) -> dict[str, Any]:
     return {
         "depth": result.plan.depth,
         "started_at": result.started_at,

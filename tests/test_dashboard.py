@@ -152,9 +152,9 @@ async def test_runner_with_no_observers_works_unchanged():
 
 async def test_dashboard_observer_updates_internal_counters():
     """The dashboard tracks counts without needing the Live to be active."""
+    from lmtwt.attacks.async_engine import AttackResult
     from lmtwt.cli_dashboard import RichDashboardObserver
     from lmtwt.scoring import compute_lss
-    from lmtwt.attacks.async_engine import AttackResult
 
     dash = RichDashboardObserver("test-target")
     # Don't enter the context (no TTY render) — just exercise the hooks.

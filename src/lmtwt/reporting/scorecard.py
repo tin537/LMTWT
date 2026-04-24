@@ -15,7 +15,6 @@ hash for chatbot-attack outputs without ids).
 from __future__ import annotations
 
 import datetime
-import json
 from dataclasses import dataclass, field
 from typing import Any
 

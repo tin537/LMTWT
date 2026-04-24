@@ -64,7 +64,7 @@ class BroadcastObserver:
     async def on_run_started(self, total: int) -> None:
         await self._broadcast({"event": "run_started", "total": total})
 
-    async def on_probe_started(self, probe: "Probe") -> None:
+    async def on_probe_started(self, probe: Probe) -> None:
         await self._broadcast({
             "event": "probe_started",
             "probe_id": probe.id,
@@ -72,14 +72,14 @@ class BroadcastObserver:
             "severity": probe.severity,
         })
 
-    async def on_probe_completed(self, outcome: "ProbeOutcome") -> None:
+    async def on_probe_completed(self, outcome: ProbeOutcome) -> None:
         from ..attacks.catalog_probe import _outcome_to_dict
         await self._broadcast({
             "event": "probe_completed",
             "outcome": _outcome_to_dict(outcome),
         })
 
-    async def on_run_finished(self, summary: "CatalogSummary") -> None:
+    async def on_run_finished(self, summary: CatalogSummary) -> None:
         summary_event = {
             "event": "run_finished",
             "total": summary.total,

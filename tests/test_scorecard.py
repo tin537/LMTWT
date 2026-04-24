@@ -158,7 +158,7 @@ def test_cells_render_dash_when_target_missing_finding():
     sc = build_scorecard([a, b])
     md = render_scorecard_markdown(sc)
     # Find the row line for p1; column B should be a dash.
-    grid_lines = [l for l in md.splitlines() if l.startswith("| 1 |")]
+    grid_lines = [line for line in md.splitlines() if line.startswith("| 1 |")]
     assert grid_lines, "no findings grid row found"
     assert "—" in grid_lines[0]
 

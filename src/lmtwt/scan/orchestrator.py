@@ -62,10 +62,10 @@ class ScanResult:
 
     target_name: str
     attacker_name: str
-    plan: "ScanPlan"
+    plan: ScanPlan
     started_at: str
     finished_at: str
-    fingerprint: "TargetFingerprint | None" = None
+    fingerprint: TargetFingerprint | None = None
     db_path: str | None = None
     executed_steps: list[str] = field(default_factory=list)
     step_durations: dict[str, float] = field(default_factory=dict)
@@ -102,7 +102,7 @@ async def run_scan(
     attacker: AsyncAIModel,
     target_name: str,
     attacker_name: str,
-    plan: "ScanPlan",
+    plan: ScanPlan,
     out_dir: Path,
     target_config: dict[str, Any] | None = None,
     target_system_prompt: str | None = None,

@@ -59,8 +59,10 @@ async def test_broadcaster_fans_out_to_multiple_subscribers():
     await bc.on_run_started(2)
     await bc.on_probe_started(p)
     # Both queues should have received both events.
-    a1 = await q1.get(); b1 = await q1.get()
-    a2 = await q2.get(); b2 = await q2.get()
+    a1 = await q1.get()
+    b1 = await q1.get()
+    a2 = await q2.get()
+    b2 = await q2.get()
     assert a1["event"] == "run_started"
     assert a2["event"] == "run_started"
     assert b1["event"] == "probe_started"
@@ -225,16 +227,18 @@ def test_post_runs_starts_run_and_sse_replays_summary_to_late_subscriber(tmp_pat
                 for line in stream.iter_lines():
                     raw_lines.append(line)
                     if "event: run_finished" in raw_lines or any(
-                        l.startswith("event: run_finished") for l in raw_lines
+                        rl.startswith("event: run_finished") for rl in raw_lines
                     ):
                         # Read one more "data:" line after the event marker.
-                        if any(l.startswith("data: ") for l in raw_lines):
+                        if any(rl.startswith("data: ") for rl in raw_lines):
                             break
             text = "\n".join(raw_lines)
             # Late-subscriber contract: at minimum, the run_finished summary fires.
             assert "run_finished" in text
             # The data line contains the JSON body — parse to verify counts.
-            data_lines = [l[len("data: "):] for l in raw_lines if l.startswith("data: ")]
+            data_lines = [
+                rl[len("data: "):] for rl in raw_lines if rl.startswith("data: ")
+            ]
             finished_payload = next(
                 json.loads(d) for d in data_lines
                 if json.loads(d).get("event") == "run_finished"

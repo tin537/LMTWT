@@ -61,7 +61,7 @@ class RichDashboardObserver:
 
     # ------------------------------------------------------------ context
 
-    async def __aenter__(self) -> "RichDashboardObserver":
+    async def __aenter__(self) -> RichDashboardObserver:
         self._live = Live(
             self._render(),
             console=self.console,
@@ -83,12 +83,12 @@ class RichDashboardObserver:
         self._started_at = time.monotonic()
         self._refresh()
 
-    async def on_probe_started(self, probe: "Probe") -> None:
+    async def on_probe_started(self, probe: Probe) -> None:
         del probe
         self._in_flight += 1
         self._refresh()
 
-    async def on_probe_completed(self, outcome: "ProbeOutcome") -> None:
+    async def on_probe_completed(self, outcome: ProbeOutcome) -> None:
         self._completed += 1
         self._in_flight = max(0, self._in_flight - 1)
         if outcome.result.success:
@@ -101,7 +101,7 @@ class RichDashboardObserver:
         self.recent.appendleft((mark, outcome.severity, outcome.probe_id, lss_score))
         self._refresh()
 
-    async def on_run_finished(self, summary: "CatalogSummary") -> None:
+    async def on_run_finished(self, summary: CatalogSummary) -> None:
         del summary
         self._in_flight = 0
         self._refresh()

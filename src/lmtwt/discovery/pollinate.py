@@ -32,12 +32,11 @@ What it is NOT:
 from __future__ import annotations
 
 import base64
-import codecs
 import re
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import date
-from typing import Awaitable, Callable
 
 from ..models.async_base import AsyncAIModel
 from ..models.conversation import Conversation
@@ -47,7 +46,6 @@ from ..probes.schema import (
     Probe,
     Taxonomy,
 )
-
 
 # ---------------------------------------------------------------- plan
 

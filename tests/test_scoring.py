@@ -1,7 +1,18 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from lmtwt.probes.schema import Probe, Taxonomy
-from lmtwt.scoring import compound_lss, compute_lss, grade_refusal, severity_from_score
+from lmtwt.scoring import (
+    EnsembleRefusalGrader,
+    LLMRefusalGrader,
+    RegexRefusalGrader,
+    compound_lss,
+    compute_lss,
+    grade_refusal,
+    severity_from_score,
+)
 
 
 def _taxonomy(**kw) -> Taxonomy:
@@ -179,15 +190,6 @@ def test_lss_as_dict_is_report_friendly():
 
 
 # ----------------------------------------------------------------- async graders
-
-import asyncio
-from types import SimpleNamespace
-
-from lmtwt.scoring import (
-    EnsembleRefusalGrader,
-    LLMRefusalGrader,
-    RegexRefusalGrader,
-)
 
 
 class _FakeGraderModel:

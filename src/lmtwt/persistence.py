@@ -135,11 +135,11 @@ class SQLiteObserver:
 
         self.run_id = await asyncio.to_thread(_start)
 
-    async def on_probe_started(self, probe: "Probe") -> None:
+    async def on_probe_started(self, probe: Probe) -> None:
         # We record only on completion; "started" is informational.
         del probe
 
-    async def on_probe_completed(self, outcome: "ProbeOutcome") -> None:
+    async def on_probe_completed(self, outcome: ProbeOutcome) -> None:
         if self._conn is None or self.run_id is None:
             return
         # Late import avoids circular deps at module load time.
@@ -165,7 +165,7 @@ class SQLiteObserver:
 
         await asyncio.to_thread(_write)
 
-    async def on_run_finished(self, summary: "CatalogSummary") -> None:
+    async def on_run_finished(self, summary: CatalogSummary) -> None:
         del summary
         if self._conn is None or self.run_id is None:
             return

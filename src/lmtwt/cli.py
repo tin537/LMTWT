@@ -1185,7 +1185,6 @@ async def _run_self_play(args) -> None:
     from .discovery import (
         SelfPlay,
         SelfPlayConfig,
-        all_self_play_coordinates,
     )
 
     coords = _parse_self_play_coordinates(args.self_play_coordinate)
@@ -1340,7 +1339,6 @@ async def _run_climb(args, target_model) -> None:
     import yaml as _yaml
 
     from .discovery import ChatTarget, LMTWTClimb
-    from .probes.loader import load_probe_file
 
     if not args.climb_seed:
         logger.error("--climb requires --climb-seed (probe id or YAML path)")
@@ -1464,8 +1462,9 @@ def _resolve_seed(seed_arg: str, catalog_path, *, flag: str):
 
 
 async def _run_pollinate(args) -> None:
-    import yaml as _yaml
     from pathlib import Path as _Path
+
+    import yaml as _yaml
 
     from .discovery import CrossPollinator
 
@@ -1942,7 +1941,6 @@ def _parse_scan_args(argv: list[str]) -> argparse.Namespace:
 
 async def _run_scan_subcommand(argv: list[str]) -> int:
     import datetime as _dt
-    import json as _json
     from pathlib import Path as _Path
 
     from .scan import build_scan_plan, run_scan, write_bundle
