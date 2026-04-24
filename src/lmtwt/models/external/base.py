@@ -100,13 +100,17 @@ class BaseExternalModel(AsyncAIModel):
             "",
         )
         payload = dict(self.api_config.get("payload_template", {}))
-        payload["prompt"] = last_user
+        # Targets vary on which field carries the user message — default to
+        # ``prompt`` for backward compat, override via ``prompt_key`` (e.g.
+        # ``"message"`` for chatbot APIs that don't use the OpenAI shape).
+        prompt_key = self.api_config.get("prompt_key", "prompt")
+        payload[prompt_key] = last_user
         if conversation.system and self.api_config.get("supports_system_prompt", False):
             sys_key = self.api_config.get("system_key")
             if sys_key:
                 payload[sys_key] = conversation.system
             else:
-                payload["prompt"] = f"{conversation.system}\n\n{last_user}"
+                payload[prompt_key] = f"{conversation.system}\n\n{last_user}"
         if self.api_config.get("supports_temperature", False):
             payload[self.api_config.get("temperature_key", "temperature")] = temperature
         if "model_key" in self.api_config:

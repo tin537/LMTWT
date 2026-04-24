@@ -77,6 +77,25 @@ def async_get_model(
             **transport_kwargs,
         )
 
+    if p in ("openai-compat", "openai-compatible"):
+        # Generic OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM proxy,
+        # any custom gateway speaking the /v1/chat/completions shape).
+        # Required env: OPENAI_COMPAT_BASE_URL. Key is optional —
+        # OPENAI_COMPAT_API_KEY (or --attacker-key) wins when set.
+        base_url = os.getenv("OPENAI_COMPAT_BASE_URL")
+        if not base_url:
+            raise ValueError(
+                "openai-compat provider requires OPENAI_COMPAT_BASE_URL "
+                "(e.g. http://localhost:11434/v1 for Ollama, or your "
+                "LiteLLM/gateway endpoint)."
+            )
+        return AsyncOpenAIModel(
+            api_key=api_key or os.getenv("OPENAI_COMPAT_API_KEY") or "no-key",
+            model_name=model_name or os.getenv("OPENAI_COMPAT_MODEL", "local-model"),
+            base_url=base_url,
+            **transport_kwargs,
+        )
+
     if p == "anthropic":
         kwargs = {"api_key": api_key, **transport_kwargs}
         if model_name:
