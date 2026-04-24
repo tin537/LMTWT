@@ -22,16 +22,58 @@ The non-stub modules ship with full tests; the stubs raise
 """
 
 from .channel_inconsistency import ChannelInconsistencyAttack, ChannelVerdict
+from .conversation_hijack import (
+    ConversationHijackAttack,
+    ConversationHijackFinding,
+    HijackAttempt,
+    generate_candidate_session_ids,
+)
+from .cost_amplification import CostAmpFinding, CostAmplificationAttack, CostAmpSummary
+from .jwt_claims import (
+    ClaimMutation,
+    JWTClaimFinding,
+    JWTClaimsAttack,
+    decode_jwt_payload,
+    encode_unsigned_jwt,
+)
+from .refusal_fatigue import (
+    FatigueScript,
+    FatigueScriptFinding,
+    RefusalFatigueAttack,
+)
 from .session_lifecycle import (
     SessionLifecycleAttack,
     SessionLifecycleFinding,
     SessionMutation,
 )
+from .tool_result_poisoning import (
+    PoisonAttempt,
+    PoisonPayload,
+    ToolResultPoisoningAttack,
+)
 
 __all__ = [
     "ChannelInconsistencyAttack",
     "ChannelVerdict",
+    "ClaimMutation",
+    "ConversationHijackAttack",
+    "ConversationHijackFinding",
+    "CostAmpFinding",
+    "CostAmpSummary",
+    "CostAmplificationAttack",
+    "FatigueScript",
+    "FatigueScriptFinding",
+    "HijackAttempt",
+    "JWTClaimFinding",
+    "JWTClaimsAttack",
+    "PoisonAttempt",
+    "PoisonPayload",
+    "RefusalFatigueAttack",
     "SessionLifecycleAttack",
     "SessionLifecycleFinding",
     "SessionMutation",
+    "ToolResultPoisoningAttack",
+    "decode_jwt_payload",
+    "encode_unsigned_jwt",
+    "generate_candidate_session_ids",
 ]

@@ -33,10 +33,20 @@ from .attacks.tools import (
 )
 from .chatbot_attacks import (
     ChannelInconsistencyAttack,
+    ConversationHijackAttack,
+    CostAmplificationAttack,
+    JWTClaimsAttack,
+    RefusalFatigueAttack,
     SessionLifecycleAttack,
+    ToolResultPoisoningAttack,
 )
 from .chatbot_attacks.channel_inconsistency import finding_to_dict as _channel_to_dict
+from .chatbot_attacks.conversation_hijack import finding_to_dict as _hijack_to_dict
+from .chatbot_attacks.cost_amplification import finding_to_dict as _cost_to_dict
+from .chatbot_attacks.jwt_claims import finding_to_dict as _jwt_to_dict
+from .chatbot_attacks.refusal_fatigue import finding_to_dict as _fatigue_to_dict
 from .chatbot_attacks.session_lifecycle import finding_to_dict as _session_to_dict
+from .chatbot_attacks.tool_result_poisoning import finding_to_dict as _poison_to_dict
 from .discovery import (
     AdaptiveAttacker,
     fingerprint_target,
@@ -176,7 +186,10 @@ def parse_args() -> argparse.Namespace:
                    help="Number of adaptive probes to generate (default: 3)")
     # Phase 5.4 — chatbot-protocol-delivered LLM attacks
     p.add_argument("--chatbot-attack", type=str, default=None,
-                   choices=["session-lifecycle", "channel-inconsistency"],
+                   choices=["session-lifecycle", "channel-inconsistency",
+                            "jwt-claims", "conversation-hijack",
+                            "cost-amplification", "refusal-fatigue",
+                            "tool-result-poisoning"],
                    help="Run an LLM-attack delivered through the chatbot's protocol")
     p.add_argument("--channel-config", action="append", default=None,
                    help="Path to additional --target-config JSON for "
@@ -541,6 +554,16 @@ async def _run_chatbot_attack(args, target_model) -> None:
         await _run_session_lifecycle(args, target_model)
     elif args.chatbot_attack == "channel-inconsistency":
         await _run_channel_inconsistency(args, target_model)
+    elif args.chatbot_attack == "jwt-claims":
+        await _run_jwt_claims(args, target_model)
+    elif args.chatbot_attack == "conversation-hijack":
+        await _run_conversation_hijack(args, target_model)
+    elif args.chatbot_attack == "cost-amplification":
+        await _run_cost_amplification(args, target_model)
+    elif args.chatbot_attack == "refusal-fatigue":
+        await _run_refusal_fatigue(args, target_model)
+    elif args.chatbot_attack == "tool-result-poisoning":
+        await _run_tool_result_poisoning(args, target_model)
 
 
 async def _run_session_lifecycle(args, target_model) -> None:
@@ -630,6 +653,139 @@ async def _run_channel_inconsistency(args, target_model) -> None:
     }
     ReportGenerator().generate_report(
         [_channel_to_dict(f) for f in findings], metadata
+    )
+
+
+async def _run_jwt_claims(args, target_model) -> None:
+    try:
+        attack = JWTClaimsAttack(target_model)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    findings = await attack.run(target_system_prompt=args.system_prompt)
+    console.print(f"[bold]Tested {len(findings)} JWT claim mutations.[/bold]\n")
+    for f in findings:
+        marker = (
+            "[yellow]⊘[/yellow]" if f.transport_rejected
+            else ("[red]●[/red]" if f.behavior_changed else "[dim]·[/dim]")
+        )
+        console.print(
+            f"  {marker} [{f.severity:8}] {f.mutation.name:20} "
+            f"grade {f.baseline_grade}→{f.mutated_grade}  {f.reason}"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack", "attack": "jwt-claims",
+        "total_findings": len(findings),
+        "behavior_changed": sum(1 for f in findings if f.behavior_changed),
+        "transport_rejected": sum(1 for f in findings if f.transport_rejected),
+    }
+    ReportGenerator().generate_report([_jwt_to_dict(f) for f in findings], metadata)
+
+
+async def _run_conversation_hijack(args, target_model) -> None:
+    try:
+        attack = ConversationHijackAttack(target_model)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    finding = await attack.run(target_system_prompt=args.system_prompt)
+    console.print(
+        f"[bold]Tried {len(finding.candidate_attempts)} candidate sessionIds.[/bold]\n"
+    )
+    for a in finding.candidate_attempts:
+        marker = "[red]●[/red]" if a.severity in ("critical", "high") else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{a.severity:8}] sid={a.candidate_session_id:30} "
+            f"leaks={len(a.leaked_indicators)}  {a.reason}"
+        )
+    if finding.most_severe and finding.most_severe.severity in ("critical", "high"):
+        console.print(
+            f"\n[bold red]⚠ Most severe: {finding.most_severe.severity} on "
+            f"sessionId {finding.most_severe.candidate_session_id}[/bold red]"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack", "attack": "conversation-hijack",
+        "candidates_tested": len(finding.candidate_attempts),
+    }
+    ReportGenerator().generate_report([_hijack_to_dict(finding)], metadata)
+
+
+async def _run_cost_amplification(args, target_model) -> None:
+    summary = await CostAmplificationAttack(target_model).run(
+        target_system_prompt=args.system_prompt
+    )
+    console.print(
+        f"[bold]Total est. tokens: {summary.total_response_tokens_est:,} "
+        f"(~${summary.total_estimated_cost_usd:.4f})  "
+        f"Max amp: {summary.max_amplification:.0f}×[/bold]\n"
+    )
+    for f in summary.findings:
+        marker = "[red]●[/red]" if f.severity in ("critical", "high") else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{f.severity:8}] {f.probe_name:22} "
+            f"out={f.response_tokens_est:>6} tok  amp={f.amplification_factor:>5.0f}× "
+            f"~${f.estimated_cost_usd:.5f}"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack", "attack": "cost-amplification",
+        "max_amplification": summary.max_amplification,
+        "total_tokens": summary.total_response_tokens_est,
+        "estimated_cost_usd": summary.total_estimated_cost_usd,
+    }
+    ReportGenerator().generate_report(
+        [_cost_to_dict(f) for f in summary.findings], metadata
+    )
+
+
+async def _run_refusal_fatigue(args, target_model) -> None:
+    findings = await RefusalFatigueAttack(target_model).run(
+        target_system_prompt=args.system_prompt
+    )
+    eroded = sum(1 for f in findings if f.eroded)
+    console.print(
+        f"[bold]{eroded}/{len(findings)} scripts caused refusal erosion.[/bold]\n"
+    )
+    for f in findings:
+        marker = "[red]●[/red]" if f.eroded else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{f.severity:8}] {f.script_name:25} "
+            f"grade {f.initial_grade}→{f.weakest_grade} (final {f.final_grade})  "
+            f"{f.reason}"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack", "attack": "refusal-fatigue",
+        "eroded_scripts": eroded, "total_scripts": len(findings),
+    }
+    ReportGenerator().generate_report(
+        [_fatigue_to_dict(f) for f in findings], metadata
+    )
+
+
+async def _run_tool_result_poisoning(args, target_model) -> None:
+    attempts = await ToolResultPoisoningAttack(target_model).run(
+        target_system_prompt=args.system_prompt
+    )
+    swallowed = sum(1 for a in attempts if a.swallowed)
+    console.print(
+        f"[bold]{swallowed}/{len(attempts)} poisoned tool results were swallowed.[/bold]\n"
+    )
+    for a in attempts:
+        marker = "[red]●[/red]" if a.swallowed else "[dim]·[/dim]"
+        console.print(
+            f"  {marker} [{a.severity:8}] {a.payload.name:30} "
+            f"{a.reason}"
+        )
+    metadata = {
+        "target_model": getattr(target_model, "model_name", "unknown"),
+        "mode": "chatbot-attack", "attack": "tool-result-poisoning",
+        "swallowed": swallowed, "total_payloads": len(attempts),
+    }
+    ReportGenerator().generate_report(
+        [_poison_to_dict(a) for a in attempts], metadata
     )
 
 
