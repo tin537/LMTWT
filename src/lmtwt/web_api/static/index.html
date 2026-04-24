@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LMTWT — Probe Catalog</title>
+  <style>
+    body { font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #111; color: #ddd; margin: 0; padding: 0; }
+    header { background: #222; padding: 12px 24px; border-bottom: 1px solid #333; }
+    header h1 { margin: 0; font-size: 16px; color: #4ec9b0; font-weight: 600; }
+    .container { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100vh - 50px); }
+    .panel { padding: 16px; overflow-y: auto; }
+    .panel.left { background: #1a1a1a; border-right: 1px solid #333; }
+    .panel.right { background: #111; }
+    label { display: block; margin: 8px 0 4px; color: #999; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    input, select { width: 100%; padding: 6px 8px; background: #222; color: #ddd; border: 1px solid #333; font: inherit; }
+    button { margin-top: 16px; padding: 8px 16px; background: #0e6b54; color: #fff; border: 0; cursor: pointer; font: inherit; }
+    button:hover:not(:disabled) { background: #14856a; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .runs-table, .events-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    .runs-table th, .runs-table td, .events-table th, .events-table td {
+      padding: 4px 8px; text-align: left; font-size: 12px; border-bottom: 1px solid #222;
+    }
+    .runs-table th, .events-table th { color: #888; font-weight: 500; }
+    .severity-critical { color: #ff5555; font-weight: 600; }
+    .severity-high { color: #ffb86c; font-weight: 600; }
+    .severity-medium { color: #f1fa8c; }
+    .severity-low { color: #888; }
+    .ok { color: #50fa7b; }
+    .ko { color: #555; }
+    #status-bar { padding: 8px 16px; background: #1a1a1a; border-bottom: 1px solid #333; font-size: 12px; }
+    #status-bar span { margin-right: 16px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>LMTWT — Probe Catalog Runner</h1>
+</header>
+<div class="container">
+  <div class="panel left">
+    <h3 style="margin-top: 0; font-size: 13px; color: #4ec9b0;">New run</h3>
+    <label>Target</label>
+    <select id="target">
+      <option value="openai">openai</option>
+      <option value="anthropic">anthropic</option>
+      <option value="gemini">gemini</option>
+      <option value="lmstudio">lmstudio</option>
+    </select>
+    <label>Target model (optional)</label>
+    <input id="target_model" placeholder="leave blank for default">
+    <label>Coordinate filter (e.g. leak/*/*/*)</label>
+    <input id="coordinate" placeholder="leak/*/*/*">
+    <label>Severity filter (csv)</label>
+    <input id="severity" placeholder="critical,high">
+    <label>Repeats</label>
+    <input id="repeats" type="number" value="1" min="1" max="50">
+    <label>Concurrency</label>
+    <input id="concurrency" type="number" value="2" min="1" max="20">
+    <button id="start-btn">Start run</button>
+
+    <h3 style="margin-top: 24px; font-size: 13px; color: #4ec9b0;">Past runs</h3>
+    <table class="runs-table">
+      <thead><tr><th>id</th><th>target</th><th>status</th><th>✓/total</th></tr></thead>
+      <tbody id="runs-body"><tr><td colspan="4" class="ko">(loading)</td></tr></tbody>
+    </table>
+  </div>
+  <div class="panel right">
+    <div id="status-bar">
+      <span><b>Run:</b> <span id="cur-run">—</span></span>
+      <span><b>Progress:</b> <span id="cur-progress">—</span></span>
+      <span><b>Successes:</b> <span id="cur-successes">—</span></span>
+      <span><b>Max LSS:</b> <span id="cur-maxlss">—</span></span>
+    </div>
+    <table class="events-table">
+      <thead><tr><th></th><th>Severity</th><th>Probe</th><th>Coordinate</th><th>LSS</th><th>Reason</th></tr></thead>
+      <tbody id="events-body"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let curRun = null, eventSrc = null;
+let completed = 0, total = 0, successes = 0, maxLss = 0;
+
+async function refreshRuns() {
+  const r = await fetch('/api/runs').then(x => x.json());
+  const body = $('runs-body');
+  if (!r.length) { body.innerHTML = '<tr><td colspan="4" class="ko">(no runs)</td></tr>'; return; }
+  body.innerHTML = r.map(run => `<tr>
+    <td>${run.id}</td>
+    <td>${run.target_name || '?'}</td>
+    <td>${run.status}</td>
+    <td>${run.successes}/${run.total_probes}</td>
+  </tr>`).join('');
+}
+
+function severityClass(s) { return `severity-${s || 'low'}`; }
+
+function appendEvent(msg) {
+  if (msg.event === 'run_started') {
+    total = msg.total;
+    $('cur-progress').textContent = `0/${total}`;
+    return;
+  }
+  if (msg.event === 'probe_completed') {
+    completed += 1;
+    const o = msg.outcome;
+    if (o.success) successes += 1;
+    if (o.lss && o.lss.score > maxLss) maxLss = o.lss.score;
+    $('cur-progress').textContent = `${completed}/${total}`;
+    $('cur-successes').textContent = successes;
+    $('cur-maxlss').textContent = maxLss.toFixed(2);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${o.success ? '<span class="ok">✓</span>' : '<span class="ko">✗</span>'}</td>
+      <td class="${severityClass(o.severity)}">${o.severity}</td>
+      <td>${o.probe_id}</td>
+      <td>${o.coordinate || ''}</td>
+      <td>${o.lss ? o.lss.score.toFixed(2) : ''}</td>
+      <td>${(o.reason || '').slice(0, 80)}</td>
+    `;
+    $('events-body').prepend(tr);
+    return;
+  }
+  if (msg.event === 'run_finished') {
+    if (eventSrc) { eventSrc.close(); eventSrc = null; }
+    $('start-btn').disabled = false;
+    refreshRuns();
+  }
+}
+
+$('start-btn').addEventListener('click', async () => {
+  $('start-btn').disabled = true;
+  $('events-body').innerHTML = '';
+  completed = 0; successes = 0; maxLss = 0;
+  const body = {
+    target: $('target').value,
+    target_model: $('target_model').value || null,
+    coordinate: $('coordinate').value || null,
+    severity: $('severity').value || null,
+    repeats: parseInt($('repeats').value) || 1,
+    concurrency: parseInt($('concurrency').value) || 1,
+    persist: true,
+  };
+  try {
+    const resp = await fetch('/api/runs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert('Run failed: ' + (err.detail || resp.status));
+      $('start-btn').disabled = false;
+      return;
+    }
+    const data = await resp.json();
+    curRun = data.run_id;
+    total = data.total_probes;
+    $('cur-run').textContent = curRun;
+    $('cur-progress').textContent = `0/${total}`;
+    $('cur-successes').textContent = '0';
+    $('cur-maxlss').textContent = '0.00';
+    eventSrc = new EventSource(`/api/runs/${curRun}/events`);
+    ['run_started', 'probe_started', 'probe_completed', 'run_finished'].forEach(e => {
+      eventSrc.addEventListener(e, ev => appendEvent(JSON.parse(ev.data)));
+    });
+  } catch (e) {
+    alert('Error: ' + e.message);
+    $('start-btn').disabled = false;
+  }
+});
+
+refreshRuns();
+setInterval(refreshRuns, 5000);
+</script>
+</body>
+</html>
