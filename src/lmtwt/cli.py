@@ -55,6 +55,7 @@ from .discovery import (
 )
 from .models.async_factory import async_get_model
 from .probes import load_corpus
+from .reporting import build_report, render_html, render_markdown, render_pdf
 from .utils.async_judge import EnsembleJudge, LLMJudge, RegexJudge, ScoringLLMJudge
 from .utils.config import load_config, load_target_config
 from .utils.logger import console, setup_logger
@@ -196,6 +197,16 @@ def parse_args() -> argparse.Namespace:
                         "--chatbot-attack=channel-inconsistency. May be passed "
                         "multiple times. Each becomes a comparison channel "
                         "(named after the file's basename).")
+    # Phase 5.5 — engagement-grade reporting
+    p.add_argument("--report-from", type=str, default=None,
+                   help="Build an engagement-grade report from a previous "
+                        "run-output JSON file (no live attacks).")
+    p.add_argument("--report-out", type=str, default="engagement-report",
+                   help="Output base path for --report-from; "
+                        ".md / .html / .pdf are appended (default: engagement-report)")
+    p.add_argument("--report-format", type=str, default="md,html",
+                   help="Comma-separated formats to emit: md, html, pdf "
+                        "(pdf requires lmtwt[report]). Default: md,html")
     return p.parse_args()
 
 
@@ -221,6 +232,40 @@ def list_vectors_and_exit() -> None:
     for v in list_vectors():
         print(f"{v['name']}: {v['description']}")
     print()
+
+
+def _emit_engagement_report(args) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    src = _Path(args.report_from)
+    if not src.is_file():
+        console.print(f"[red]No such file: {src}[/red]")
+        sys.exit(1)
+    payload = _json.loads(src.read_text(encoding="utf-8"))
+    report = build_report(payload)
+    formats = {f.strip().lower() for f in args.report_format.split(",") if f.strip()}
+    base = _Path(args.report_out)
+
+    if "md" in formats:
+        out = base.with_suffix(".md")
+        out.write_text(render_markdown(report), encoding="utf-8")
+        console.print(f"[green]Wrote {out}[/green]")
+    if "html" in formats:
+        out = base.with_suffix(".html")
+        out.write_text(render_html(report), encoding="utf-8")
+        console.print(f"[green]Wrote {out}[/green]")
+    if "pdf" in formats:
+        try:
+            out = render_pdf(report, base.with_suffix(".pdf"))
+            console.print(f"[green]Wrote {out}[/green]")
+        except RuntimeError as e:
+            console.print(f"[yellow]Skipped PDF: {e}[/yellow]")
+    console.print(
+        f"\n[bold]Findings: {len(report.findings)}[/bold]  "
+        f"Max LSS: {report.max_lss:.2f}  "
+        f"Severity: {dict(report.severity_counts)}"
+    )
 
 
 def list_probes_and_exit(args) -> None:
@@ -927,6 +972,9 @@ async def async_main() -> None:
         return
     if args.list_probes:
         list_probes_and_exit(args)
+        return
+    if args.report_from:
+        _emit_engagement_report(args)
         return
 
     config = load_config(args.config)

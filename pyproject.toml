@@ -49,6 +49,9 @@ local = [
 web = [
   "gradio>=3.50.0",
 ]
+report = [
+  "weasyprint>=60",
+]
 
 [dependency-groups]
 dev = [

@@ -153,15 +153,18 @@ generic web-app surface (which is a different tool's job).
 | **Multi-turn refusal fatigue** | ✅ — `chatbot_attacks/refusal_fatigue.py`. 3 built-in scripts (research-framing, incremental-roleplay, conditional-acceptance). Grades every turn; flags critical when initial A/B → mid-script F. |
 | **Tool-result poisoning at the protocol level** | ✅ — `chatbot_attacks/tool_result_poisoning.py`. 3 default payloads (auth-uplift, balance-injection, instruction-injection-via-tool). Frames poisoned content as a tool reply in conversation, then asks an extraction question; per-payload swallow heuristics decide critical/high/low. |
 
-### 5.5 Engagement-grade reporting ⬜
+### 5.5 Engagement-grade reporting 🚧
 
-| Item | What |
+| Item | Status |
 |---|---|
-| **PDF report generator** | Markdown → PDF via WeasyPrint. Sections: Executive Summary, Methodology (cite taxonomy), Findings Table, Detailed Findings (per-page with reproduction + transcripts), Remediation, Appendix. |
-| **Reproduction packs** | Each finding ships with `repro.json`: minimal config + exact prompt + expected response. Client engineers re-run independently. |
-| **Before / after diff mode** | Re-run the same battery post-patch → "12 of 15 remediated. 1 regressed. 2 new." |
-| **Live TUI dashboard** | Real-time probe grid, hit rate, severity distribution during a scan. |
-| **Multi-target scorecard** | Same battery against multiple bots → side-by-side grid for procurement / vendor evaluation. |
+| **Markdown report generator** | ✅ — `src/lmtwt/reporting/builder.py`. Normalizes any run-output JSON (catalog probes, chatbot attacks, session/JWT/hijack findings) into a unified `Finding` shape, sorts by LSS desc, emits exec summary + methodology + findings table + per-finding detail + OWASP-tagged remediation guidance + appendix. |
+| **HTML renderer** | ✅ — Standalone HTML with embedded print-friendly CSS, target-response escape, no external Markdown dep. |
+| **PDF generator** | ✅ — `render_pdf()` via WeasyPrint (optional `lmtwt[report]` extra). Falls back gracefully to MD/HTML when WeasyPrint isn't installed. |
+| **CLI integration** | ✅ — `--report-from <run.json> --report-out <basename> --report-format md,html,pdf`. |
+| **Reproduction packs** | ⬜ — Each finding ships with a self-contained `repro.json`: minimal target-config + exact prompt + expected response pattern. Client engineers can re-run independently. |
+| **Before / after diff mode** | ⬜ — Re-run the same battery post-patch → "12 of 15 remediated. 1 regressed. 2 new." |
+| **Live TUI dashboard** | ⬜ — Real-time probe grid, hit rate, severity distribution during a scan. |
+| **Multi-target scorecard** | ⬜ — Same battery against multiple bots → side-by-side grid for procurement / vendor evaluation. |
 
 ### 5.6 What we're explicitly NOT doing
 
