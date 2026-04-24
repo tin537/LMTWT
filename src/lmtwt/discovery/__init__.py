@@ -11,6 +11,22 @@ attack stream based on what it sees. Two pieces:
 """
 
 from .adaptive import AdaptedProbe, AdaptiveAttacker
+from .climb import (
+    DEFAULT_MUTATORS,
+    ChatTarget,
+    ClimbAttempt,
+    ClimbResult,
+    DistractorMutator,
+    EncodingMutator,
+    LMTWTClimb,
+    MutationContext,
+    Mutator,
+    PersonaMutator,
+    RestructureMutator,
+    SynonymMutator,
+    TargetShim,
+    TranslationMutator,
+)
 from .fingerprint import (
     CALIBRATION_PROBES,
     TargetFingerprint,
@@ -18,12 +34,46 @@ from .fingerprint import (
     load_fingerprint,
     save_fingerprint,
 )
+from .pollinate import (
+    CrossPollinationPlan,
+    CrossPollinator,
+    PollinatedProbe,
+)
+from .self_play import (
+    CriticVerdict,
+    SelfPlay,
+    SelfPlayCandidate,
+    SelfPlayConfig,
+    all_self_play_coordinates,
+)
 
 __all__ = [
     "CALIBRATION_PROBES",
+    "DEFAULT_MUTATORS",
     "AdaptedProbe",
     "AdaptiveAttacker",
+    "ChatTarget",
+    "ClimbAttempt",
+    "ClimbResult",
+    "CriticVerdict",
+    "CrossPollinationPlan",
+    "CrossPollinator",
+    "DistractorMutator",
+    "EncodingMutator",
+    "LMTWTClimb",
+    "MutationContext",
+    "Mutator",
+    "PersonaMutator",
+    "PollinatedProbe",
+    "RestructureMutator",
+    "SelfPlay",
+    "SelfPlayCandidate",
+    "SelfPlayConfig",
+    "SynonymMutator",
     "TargetFingerprint",
+    "TargetShim",
+    "TranslationMutator",
+    "all_self_play_coordinates",
     "fingerprint_target",
     "load_fingerprint",
     "save_fingerprint",
